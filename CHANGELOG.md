@@ -1,5 +1,9 @@
 # Changelog
 
+## [v1.2.2] - 2026-10-18
+### Fixed
+- Policy construction is now seeded *before* initialization everywhere it is trained: new `seeded_policy` helper (`torch.manual_seed(seed)` runs before the network is built) replaces bare `CPPIPolicy()` / `MultiAssetPolicy()` construction in the chronological, crash-ablation and multi-asset runners. Equal seeds now guarantee equal initializations regardless of construction order or preceding RNG state; the training functions still re-seed the torch stream at train start, and sampler/evaluation draws keep their separate `seed + epoch` / `seed + 999` numpy seeds. New `policy_init_hash` helper records a short SHA-256 fingerprint of the initial weights (logged by the runners). Regression tests: init hash depends only on the seed across polluted RNG states, and two fresh processes produce identical init and post-training hashes under deterministic CPU settings.
+
 ## [v1.2.1] - 2026-10-18
 ### Fixed
 - `rollout` and `rollout_multi` now write the post-liquidation wealth into the final path point, so `path[:, -1] == V_T` for every path. Previously the liquidation cost was subtracted from `V_T` after the path was closed, so terminal and anytime breach statistics could disagree at the horizon. Regression tests: terminal-point equality on random paths, a hand-computed fixture where wealth sits just above the floor before liquidation but below it after (the anytime breach now registers), and a zero-cost fixture confirming the economic path is unchanged.

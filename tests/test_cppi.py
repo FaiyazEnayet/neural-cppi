@@ -4,6 +4,8 @@ No network: synthetic price paths only. Fast by design.
 """
 
 import math
+import subprocess
+import sys
 
 import numpy as np
 import torch
@@ -17,7 +19,9 @@ from dhl.experiments.cppi_learned import (
     CPPIPolicy,
     _vol_features,
     classic_cppi_weight,
+    policy_init_hash,
     rollout,
+    seeded_policy,
     train_cppi_policy,
 )
 
@@ -203,3 +207,49 @@ def test_zero_cost_path_matches_former_economics():
                               return_path=True)
     assert torch.allclose(path_bh[:, -1], V_T_bh, atol=1e-6)
     assert torch.allclose(V_T_bh, 100.0 * S[:, -1] / S[:, 0], atol=1e-3)
+
+
+def test_seeded_init_order_independent():
+    # Whatever RNG state precedes construction, the init hash must
+    # depend only on the seed: variant order cannot change inits.
+    torch.manual_seed(999)
+    _ = torch.randn(10000)
+    a1 = seeded_policy(CPPIPolicy, seed=42)
+    torch.manual_seed(999)
+    _ = torch.randn(10000)
+    b = seeded_policy(CPPIPolicy, seed=43)
+    a2 = seeded_policy(CPPIPolicy, seed=42)
+    assert policy_init_hash(a1) == policy_init_hash(a2)
+    assert policy_init_hash(a1) != policy_init_hash(b)
+
+
+def test_seeded_init_deterministic_across_processes():
+    # Two fresh python processes, same seed, deterministic CPU settings:
+    # identical init hash and identical hash after a short train.
+    code = "\n".join([
+        "import torch, numpy as np",
+        "torch.use_deterministic_algorithms(True)",
+        "from dhl.experiments.cppi_learned import (",
+        "    seeded_policy, policy_init_hash, train_cppi_policy,",
+        "    CPPIPolicy, V0)",
+        "rng_rets = np.random.default_rng(0).normal(0.0, 0.01, 2000)",
+        "def sampler(n, s):",
+        "    r = np.random.default_rng(s)",
+        "    idx = r.integers(0, 2000 - 30, size=(n, 30))",
+        "    paths = np.empty((n, 31)); paths[:, 0] = V0",
+        "    paths[:, 1:] = V0 * np.exp(np.cumsum(rng_rets[idx], axis=1))",
+        "    return paths",
+        "p = seeded_policy(CPPIPolicy, seed=123)",
+        "h0 = policy_init_hash(p)",
+        "train_cppi_policy(p, sampler, 30, n_epochs=2, batch_size=64,",
+        "                  seed=123, log_every=0)",
+        "print(h0, policy_init_hash(p))",
+    ])
+    def run_once():
+        r = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=300,
+        )
+        assert r.returncode == 0, r.stderr[-2000:]
+        return r.stdout.strip()
+    assert run_once() == run_once()

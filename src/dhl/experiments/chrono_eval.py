@@ -37,7 +37,9 @@ from dhl.experiments.cppi_learned import (
     CPPIPolicy,
     _learned_weight_fn,
     block_bootstrap_paths,
+    policy_init_hash,
     rollout,
+    seeded_policy,
     train_cppi_policy,
 )
 from dhl.markets.real import load_spy_daily, log_returns
@@ -105,7 +107,8 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
             train_rets, n, horizon, BLOCK_LEN, S0=V0, seed=s)
 
     print("\ntraining policy on pre-2020 data...", flush=True)
-    policy = CPPIPolicy()
+    policy = seeded_policy(CPPIPolicy, seed=seed)
+    print(f"policy init hash: {policy_init_hash(policy)}", flush=True)
     train_cppi_policy(policy, train_sampler, horizon, n_epochs=n_epochs,
                       batch_size=batch_size, seed=seed, log_every=50)
 

@@ -18,6 +18,7 @@ Writes ``runs/cppi/metrics.json`` and prints the comparison table.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -99,6 +100,30 @@ class CPPIPolicy(nn.Module):
             cols.append(feats[name])
         x = torch.stack(cols, dim=1)
         return (self.cap * torch.sigmoid(self.net(x))).squeeze(1)
+
+
+def seeded_policy(policy_cls=CPPIPolicy, *args, seed=SEED, **kwargs):
+    """Construct a policy with the torch RNG seeded *before* init.
+
+    The initial weights then depend only on ``seed``, never on whatever
+    RNG state happened to precede the call, so equal seeds give equal
+    initializations regardless of construction order. Every training
+    call site must build its policy through this helper (or otherwise
+    seed first): ``train_cppi_policy`` / ``train_multi_policy`` seed
+    the torch stream again at training start, so the init stream and
+    the training stream stay independent. Sampler and evaluation draws
+    use ``seed + epoch`` / ``seed + 999`` numpy seeds, a separate stream.
+    """
+    torch.manual_seed(seed)
+    return policy_cls(*args, **kwargs)
+
+
+def policy_init_hash(policy):
+    """Short SHA-256 fingerprint of a policy's parameters."""
+    h = hashlib.sha256()
+    for p in policy.parameters():
+        h.update(p.detach().cpu().numpy().tobytes())
+    return h.hexdigest()[:16]
 
 
 def _vol_features(S, window=21):
@@ -396,7 +421,7 @@ def run_experiment(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, n_test=N_TEST,
         for m in MULTIPLIERS:
             strategies[f"classic_m{m}"] = _classic_weight_fn(m)
 
-        policy = CPPIPolicy()
+        policy = seeded_policy(CPPIPolicy, seed=seed)
         train_cppi_policy(policy, sampler_h, horizon, n_epochs=n_epochs,
                           batch_size=batch_size, seed=seed, log_every=50)
         strategies["learned"] = _learned_weight_fn(policy)

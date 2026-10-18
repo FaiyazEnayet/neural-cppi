@@ -41,6 +41,8 @@ from dhl.experiments.cppi_learned import (
     V0,
     _vol_features,
     classic_cppi_weight,
+    policy_init_hash,
+    seeded_policy,
 )
 from dhl.markets.real import block_bootstrap_paths, load_aligned_returns
 
@@ -346,6 +348,8 @@ def experiment_multi_asset(dates, rets, horizons=(30, 63),
         CPPIPolicy,
         _learned_weight_fn,
         block_bootstrap_paths as _bb1,
+        policy_init_hash,
+        seeded_policy,
         train_cppi_policy,
     )
 
@@ -361,13 +365,13 @@ def experiment_multi_asset(dates, rets, horizons=(30, 63),
         P_test = sampler(n_test, seed + 999)
 
         # Learned multi-asset.
-        policy_m = MultiAssetPolicy(len(TICKERS))
+        policy_m = seeded_policy(MultiAssetPolicy, len(TICKERS), seed=seed)
         train_multi_policy(policy_m, sampler, horizon, n_epochs=n_epochs,
                            batch_size=batch_size, seed=seed, log_every=50)
         m_multi = evaluate_multi(_learned_multi_weight_fn(policy_m), P_test)
 
         # Learned single-asset (SPY only), no-leverage cap for fairness.
-        policy_s = CPPIPolicy()
+        policy_s = seeded_policy(CPPIPolicy, seed=seed)
         train_cppi_policy(
             policy_s,
             lambda n, s: _bb1(rets["SPY"], n, horizon, BLOCK_LEN,
@@ -404,7 +408,7 @@ def experiment_drawdown(dates, rets, horizon=30, n_epochs=N_EPOCHS,
     for floor_mode in ("fixed", "drawdown"):
         print(f"\n=== drawdown experiment, {horizon}d, floor={floor_mode} ===",
               flush=True)
-        policy = MultiAssetPolicy(len(TICKERS))
+        policy = seeded_policy(MultiAssetPolicy, len(TICKERS), seed=seed)
         train_multi_policy(policy, sampler, horizon, floor_mode=floor_mode,
                            n_epochs=n_epochs, batch_size=batch_size,
                            seed=seed, log_every=50)
@@ -432,6 +436,8 @@ def experiment_cross_decade(dates, rets, horizon=30, n_epochs=N_EPOCHS,
         CPPIPolicy,
         _learned_weight_fn,
         block_bootstrap_paths as _bb1,
+        policy_init_hash,
+        seeded_policy,
         train_cppi_policy,
     )
 
@@ -450,12 +456,12 @@ def experiment_cross_decade(dates, rets, horizon=30, n_epochs=N_EPOCHS,
     S_test = post_sampler(n_test, seed + 999)
 
     # Learned policy trained only on pre-2020 data.
-    policy_pre = CPPIPolicy()
+    policy_pre = seeded_policy(CPPIPolicy, seed=seed)
     train_cppi_policy(policy_pre, pre_sampler, horizon, n_epochs=n_epochs,
                       batch_size=batch_size, seed=seed, log_every=0)
 
     # Same architecture trained on all data (upper reference).
-    policy_all = CPPIPolicy()
+    policy_all = seeded_policy(CPPIPolicy, seed=seed)
     train_cppi_policy(
         policy_all,
         lambda n, s: _bb1(rets["SPY"], n, horizon, BLOCK_LEN, S0=V0, seed=s),

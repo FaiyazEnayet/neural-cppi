@@ -60,6 +60,8 @@ from dhl.experiments.cppi_learned import (
     classic_cppi_weight,
     cppi_constrained_weight_fn,
     rollout,
+    policy_init_hash,
+    seeded_policy,
     train_cppi_policy,
 )
 from dhl.markets.real import load_spy_daily, log_returns
@@ -91,7 +93,9 @@ def _train_variant(train_rets, feature_names, crash_mult, seed,
         return block_bootstrap_paths(
             train_rets, n, HORIZON, BLOCK_LEN, S0=V0, seed=s)
 
-    policy = CPPIPolicy(feature_names=feature_names)
+    policy = seeded_policy(CPPIPolicy, seed=seed,
+                           feature_names=feature_names)
+    print(f"    init hash: {policy_init_hash(policy)}", flush=True)
     train_cppi_policy(policy, sampler, HORIZON, n_epochs=n_epochs,
                       batch_size=batch_size, seed=seed, log_every=0,
                       crash_mult=crash_mult)

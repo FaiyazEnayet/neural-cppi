@@ -195,7 +195,8 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
     S has shape (n_paths, n_steps + 1). weight_fn(i, V, tau_frac,
     cushion_ratio, vol) picks the risky weight in [0, cap] at each
     rebalancing date. Returns terminal wealth per path (n_paths,);
-    with return_path=True also the full wealth path.
+    with return_path=True also the full wealth path. The final path
+    point is post-liquidation wealth, so path[:, -1] == V_T exactly.
     """
     n, steps_p1 = S.shape
     steps = steps_p1 - 1
@@ -223,6 +224,10 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
 
     V = V - cost_rate * D.abs()  # liquidate the risky leg at T
     if return_path:
+        # Terminal accounting convention: the final path point is the
+        # post-liquidation wealth, so path[:, -1] == V_T exactly and
+        # anytime-breach statistics see the liquidation cost too.
+        path[-1] = V.clone()
         return V, torch.stack(path, dim=1)
     return V
 

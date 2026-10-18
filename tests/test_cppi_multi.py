@@ -189,3 +189,17 @@ def test_trail_features_first_step_is_zero():
     trail = _trail_features(P)
     assert torch.all(trail[:, 0, :] == 0.0)
     assert torch.isfinite(trail).all()
+
+
+def test_multi_terminal_liquidation_in_path():
+    # Same terminal convention as rollout: W[:, -1] == V_T exactly,
+    # with nonzero liquidation costs on the risky legs.
+    torch.manual_seed(0)
+    rets = torch.randn(3, 20, 2) * 0.02
+    P = torch.as_tensor(
+        100.0 * np.exp(np.concatenate(
+            [np.zeros((3, 1, 2)), np.cumsum(rets.numpy(), axis=1)], axis=1)),
+        dtype=torch.float32)
+    V, W, F = rollout_multi(P, _const_multi([0.6, 0.4, 0.0]),
+                            cost_rate=0.02, return_path=True)
+    assert torch.equal(W[:, -1], V)

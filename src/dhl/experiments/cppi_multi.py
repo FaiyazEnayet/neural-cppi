@@ -158,7 +158,8 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
     trail_i, floor_t) returns (n_paths, n_assets + 1) weights, last
     column cash, nonnegative and summing to one. Returns terminal
     wealth per path; with return_path=True also the wealth and floor
-    paths.
+    paths. The final wealth path point is post-liquidation wealth,
+    so W[:, -1] == V_T exactly.
     """
     n, steps_p1, na = P.shape
     steps = steps_p1 - 1
@@ -197,6 +198,9 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
 
     V = V - cost_rate * D.abs().sum(dim=1)  # liquidate at T
     if return_path:
+        # Same terminal convention as rollout: the final path point is
+        # post-liquidation wealth, so W[:, -1] == V_T exactly.
+        wealth_path[-1] = V.clone()
         W = torch.stack(wealth_path, dim=1)
         F = torch.stack(
             [torch.full_like(V, floor)] + floor_vals, dim=1

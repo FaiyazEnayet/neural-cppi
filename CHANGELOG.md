@@ -1,5 +1,9 @@
 # Changelog
 
+## [v1.2.1] - 2026-10-18
+### Fixed
+- `rollout` and `rollout_multi` now write the post-liquidation wealth into the final path point, so `path[:, -1] == V_T` for every path. Previously the liquidation cost was subtracted from `V_T` after the path was closed, so terminal and anytime breach statistics could disagree at the horizon. Regression tests: terminal-point equality on random paths, a hand-computed fixture where wealth sits just above the floor before liquidation but below it after (the anytime breach now registers), and a zero-cost fixture confirming the economic path is unchanged.
+
 ## [v1.2.0] - 2026-10-17
 ### Added
 - Chronological out-of-time evaluation: strict train (pre-2020) / validate (2021-2022) / test (2023+) splits with contiguous real-history paths, COVID crash stress set, and paired strategy comparison on identical paths.

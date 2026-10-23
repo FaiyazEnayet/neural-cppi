@@ -213,48 +213,146 @@ def _crash_features(S):
     }
 
 
+def _rebalance_holding(wealth, holding, weight, cost_rate):
+    """Exact self-financing rebalance to a target risky weight.
+
+    The target weight applies to post-trade wealth, so the new risky
+    holding ``H'`` solves the piecewise-linear equation
+
+        H' = w * (V - cost_rate * |H' - H|)
+
+    with one branch per trade direction (the branch is decided by
+    comparing the target weight ``w`` with the current weight
+    ``H / V``; both branches agree at ``w == H / V``, where the trade
+    is zero):
+
+        buy  (w >= H/V):  H' = w (V + c H) / (1 + w c)
+        sell (w <  H/V):  H' = w (V - c H) / (1 - w c)
+
+    Returns ``(holding_post, fee)`` with
+    ``fee = cost_rate * |H' - H|`` charged on the actual trade.
+    Differentiable in wealth, holding and weight.
+    """
+    current = holding / wealth.clamp_min(1e-8)
+    buy = weight * (wealth + cost_rate * holding) \
+        / (1.0 + weight * cost_rate)
+    sell = weight * (wealth - cost_rate * holding) \
+        / (1.0 - weight * cost_rate).clamp_min(1e-9)
+    post = torch.where(weight >= current, buy, sell)
+    fee = cost_rate * (post - holding).abs()
+    return post, fee
+
+
 def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
-            return_path=False):
+            return_path=False, cap=CAP, borrow_rate=None,
+            return_ledger=False):
     """Self-financing portfolio wealth under a dynamic allocation.
 
     S has shape (n_paths, n_steps + 1). weight_fn(i, V, tau_frac,
-    cushion_ratio, vol) picks the risky weight in [0, cap] at each
-    rebalancing date. Returns terminal wealth per path (n_paths,);
+    cushion_ratio, vol) picks the risky weight at each rebalancing
+    date; the weight is clamped to [0, cap], so ``cap`` is the
+    leverage limit of the rollout itself (weights above 1 borrow:
+    cash goes negative). Returns terminal wealth per path (n_paths,);
     with return_path=True also the full wealth path. The final path
     point is post-liquidation wealth, so path[:, -1] == V_T exactly.
+
+    Accounting is an explicit ledger, not a wealth shortcut. The state
+    is (cash, risky units); at each rebalancing date the risky holding
+    is moved to the target weight of post-trade wealth by solving the
+    exact proportional-cost rebalance equation (see
+    ``_rebalance_holding``), cash pays for the trade plus its fee, and
+    the fee is charged on the actual traded notional. Between dates,
+    cash earns ``r`` while nonnegative and ``borrow_rate`` while
+    negative (borrowing); ``borrow_rate=None`` borrows at ``r``, the
+    historical funding assumption. At the horizon the risky leg is
+    liquidated at the terminal price and charged on its true terminal
+    value. Every trade is therefore exactly self-financing:
+    cash + risky value + cumulative fees reconciles step by step.
+
+    With return_ledger=True, also returns a dict of stacked tensors
+    recording the ledger at every trade: per-step (dim 1) ``price``,
+    ``cash_pre``, ``units_pre``, ``holding_pre``, ``wealth_pre``,
+    ``weight`` (effective, post-clamp), ``holding_post``, ``notional``,
+    ``fee``, ``cash_post``, ``units_post``; and terminal ``cash_pre``
+    grown to the horizon as ``cash_terminal``, ``holding_terminal``,
+    ``wealth_pre_liquidation``, ``liquidation_notional``,
+    ``liquidation_fee``, ``cum_fees`` and ``terminal_wealth``.
     """
     n, steps_p1 = S.shape
     steps = steps_p1 - 1
     T = steps * dt
     device, dtype = S.device, S.dtype
-    V = torch.full((n,), V0, device=device, dtype=dtype)
-    D = torch.zeros(n, device=device, dtype=dtype)  # risky dollars held
-    growth = math.exp(r * dt)
-    rets = S[:, 1:] / S[:, :-1]
+    r_borrow = r if borrow_rate is None else borrow_rate
+    cash = torch.full((n,), V0, device=device, dtype=dtype)
+    units = torch.zeros(n, device=device, dtype=dtype)  # risky units held
     feats_full = _crash_features(S)
-    path = [V.clone()] if return_path else None
+    path = [torch.full((n,), V0, device=device, dtype=dtype)] \
+        if return_path else None
+    rec = [] if return_ledger else None
 
     for i in range(steps):
+        price = S[:, i]
+        holding = units * price
+        V = cash + holding
         tau_frac = (T - i * dt) / T
         cushion = torch.clamp((V - floor) / V.clamp_min(1e-8), -1.0, 1.0)
         feats = {k: v[:, i] for k, v in feats_full.items()}
-        w = weight_fn(i, V, tau_frac, cushion, feats)
-        prev_grown = D if i == 0 else D * rets[:, i - 1]
-        target = w * V
-        V = V - cost_rate * (target - prev_grown).abs()
-        D = w * V
-        V = (V - D) * growth + D * rets[:, i]
+        w = torch.as_tensor(weight_fn(i, V, tau_frac, cushion, feats),
+                            device=device, dtype=dtype)
+        w = torch.clamp(w, min=0.0, max=cap)
+        post, fee = _rebalance_holding(V, holding, w, cost_rate)
+        notional = (post - holding).abs()
+        cash_post = cash - (post - holding) - fee
+        units_post = post / price
+        if return_ledger:
+            rec.append({
+                "price": price, "cash_pre": cash, "units_pre": units,
+                "holding_pre": holding, "wealth_pre": V, "weight": w,
+                "holding_post": post, "notional": notional, "fee": fee,
+                "cash_post": cash_post, "units_post": units_post,
+            })
+        # Evolve one period: cash accrues at r, or at the borrowing
+        # rate while it is negative; units ride the price move.
+        rate = torch.where(cash_post >= 0,
+                           torch.full_like(cash_post, r),
+                           torch.full_like(cash_post, r_borrow))
+        cash = cash_post * torch.exp(rate * dt)
+        units = units_post
         if return_path:
-            path.append(V.clone())
+            path.append((cash + units * S[:, i + 1]).clone())
 
-    V = V - cost_rate * D.abs()  # liquidate the risky leg at T
+    # Liquidate the risky leg at the terminal price: a final trade,
+    # charged on the true terminal holding value.
+    holding_T = units * S[:, steps]
+    wealth_pre_liq = cash + holding_T
+    liq_notional = holding_T.abs()
+    liq_fee = cost_rate * liq_notional
+    V = wealth_pre_liq - liq_fee
+
+    out = [V]
     if return_path:
         # Terminal accounting convention: the final path point is the
         # post-liquidation wealth, so path[:, -1] == V_T exactly and
         # anytime-breach statistics see the liquidation cost too.
         path[-1] = V.clone()
-        return V, torch.stack(path, dim=1)
-    return V
+        out.append(torch.stack(path, dim=1))
+    if return_ledger:
+        ledger = {k: torch.stack([r_[k] for r_ in rec], dim=1)
+                  for k in rec[0]} if rec else {}
+        ledger.update({
+            "cash_terminal": cash,
+            "holding_terminal": holding_T,
+            "wealth_pre_liquidation": wealth_pre_liq,
+            "liquidation_notional": liq_notional,
+            "liquidation_fee": liq_fee,
+            "cum_fees": (ledger["fee"].sum(dim=1) if rec
+                         else torch.zeros_like(V)) + liq_fee,
+            "terminal_wealth": V,
+        })
+        out.append(ledger)
+    if len(out) == 1:
+        return V
+    return tuple(out)
 
 
 def _learned_weight_fn(policy):

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Changed
+- `rollout` in `src/dhl/experiments/cppi_learned.py` now keeps an explicit holdings ledger (cash, risky units, traded notional, fees) instead of a wealth shortcut: each rebalance solves the exact proportional-cost equation so the target weight holds on post-trade wealth and every fee is charged on the actual trade, and the terminal liquidation is charged on the true terminal holding value. The leverage cap and the funding assumption are now parameters (`cap=CAP`, `borrow_rate=None`, which borrows at the cash rate as before); existing callers and signatures are unchanged. Exact self-financing moves recorded experiment numbers slightly (the old approximation overcharged buys and the stale-value liquidation, undercharged sells); committed results were not regenerated. New fixture: `tests/test_stage3_neural_cppi_3_ledger.py` (self-financing identity at every trade, an independent scalar reference, and zero-return / buy-and-hold / cap=1 / cap>1 / fee-only property cases).
+
 ## [v1.2.2] - 2026-10-18
 ### Fixed
 - Policy construction is now seeded *before* initialization everywhere it is trained: new `seeded_policy` helper (`torch.manual_seed(seed)` runs before the network is built) replaces bare `CPPIPolicy()` / `MultiAssetPolicy()` construction in the chronological, crash-ablation and multi-asset runners. Equal seeds now guarantee equal initializations regardless of construction order or preceding RNG state; the training functions still re-seed the torch stream at train start, and sampler/evaluation draws keep their separate `seed + epoch` / `seed + 999` numpy seeds. New `policy_init_hash` helper records a short SHA-256 fingerprint of the initial weights (logged by the runners). Regression tests: init hash depends only on the seed across polluted RNG states, and two fresh processes produce identical init and post-training hashes under deterministic CPU settings.

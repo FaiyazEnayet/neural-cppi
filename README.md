@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="https://img.shields.io/badge/Open-Dashboard-c6a66b?style=for-the-badge&labelColor=111215" alt="Open Dashboard"></a>
+  <a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="https://img.shields.io/badge/Open-Dashboard-996515?style=for-the-badge&labelColor=111215" alt="Open Dashboard"></a>
   <a href="#method"><img src="https://img.shields.io/badge/Explore-Method-414348?style=for-the-badge&labelColor=111215" alt="Explore Method"></a>
   <a href="#run-locally"><img src="https://img.shields.io/badge/Run-Locally-1a1b1e?style=for-the-badge&labelColor=111215" alt="Run Locally"></a>
 </p>

@@ -9,7 +9,7 @@
   <a href="https://hub.xerj.org/contributors/FaiyazEnayet"><img src="https://hub.xerj.org/contributors/FaiyazEnayet/badge.svg" alt="XERJ Corpus Hub contributor"></a>
   <img src="https://img.shields.io/badge/license-MIT-c6a66b?labelColor=24292f" alt="License: MIT">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?labelColor=24292f" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/built%20with-PyTorch%20%2B%20NumPy-C2410C?labelColor=24292f" alt="Built with PyTorch + NumPy">
+  <img src="https://img.shields.io/badge/built%20with-PyTorch%20%2B%20NumPy-301934?labelColor=24292f" alt="Built with PyTorch + NumPy">
 </p>
 
 <p align="center">

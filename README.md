@@ -1,16 +1,27 @@
 <p align="center"><img src="docs/readme-banner.svg?v=type-20261017b" alt="Neural-CPPI: Learned allocation under portfolio floor constraints" width="1200"></p>
 
-[![Tests](https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml/badge.svg)](https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml)
-[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/FaiyazEnayet/badge.svg)](https://hub.xerj.org/contributors/FaiyazEnayet) [![License: MIT](https://img.shields.io/badge/license-MIT-007EC6)](LICENSE) ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB) ![Built with PyTorch + NumPy](https://img.shields.io/badge/built%20with-PyTorch%20%2B%20NumPy-555555) [![Interactive demo](https://img.shields.io/badge/demo-interactive-4C9D39)](https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html)
+<h1 align="center">Neural-CPPI</h1>
 
-<p align="center"><a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><b>Open interactive demo</b></a> · <a href="#method">Method</a> · <a href="#run-locally">Run locally</a></p>
+<p align="center">Learned allocation under portfolio floor constraints, benchmarked against classical CPPI.</p>
 
-# Neural-CPPI
+<p align="center">
+  <a href="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml"><img src="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml/badge.svg?label=CI&labelColor=24292f" alt="CI"></a>
+  <a href="https://hub.xerj.org/contributors/FaiyazEnayet"><img src="https://hub.xerj.org/contributors/FaiyazEnayet/badge.svg" alt="XERJ Corpus Hub contributor"></a>
+  <img src="https://img.shields.io/badge/license-MIT-c6a66b?labelColor=24292f" alt="License: MIT">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?labelColor=24292f" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/built%20with-PyTorch%20%2B%20NumPy-C2410C?labelColor=24292f" alt="Built with PyTorch + NumPy">
+</p>
+
+<p align="center">
+  <a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="https://img.shields.io/badge/Open-Dashboard-c6a66b?style=for-the-badge&labelColor=111215" alt="Open Dashboard"></a>
+  <a href="#method"><img src="https://img.shields.io/badge/Explore-Method-414348?style=for-the-badge&labelColor=111215" alt="Explore Method"></a>
+  <a href="#run-locally"><img src="https://img.shields.io/badge/Run-Locally-1a1b1e?style=for-the-badge&labelColor=111215" alt="Run Locally"></a>
+</p>
 
 A research implementation of neural portfolio insurance. It compares learned allocation policies with classical CPPI and makes the trade between terminal wealth and floor protection inspectable.
 
 
-[![Neural-CPPI demo](docs/demo.gif?v=showcase-20261017b)](https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html)
+<p align="center"><a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="docs/demo.gif?v=showcase-20261017b" alt="Neural-CPPI demo"></a></p>
 
 
 The dashboard separates return-seeking behavior from protection outcomes. Read the wealth comparison together with breach frequency, horizon and allocation policy: a stronger average result can still carry undesirable tail risk. The regime summaries provide a second check on whether conclusions depend on a particular return environment.

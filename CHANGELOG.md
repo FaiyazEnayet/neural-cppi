@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Docs
+- Centered the README header: uniform dark badge labels and three action buttons in the dashboard palette (Open Dashboard, Explore Method, Run Locally). The XERJ Corpus Hub contributor badge stays in the badge row.
+
 ### Changed
 - `rollout` in `src/dhl/experiments/cppi_learned.py` now keeps an explicit holdings ledger (cash, risky units, traded notional, fees) instead of a wealth shortcut: each rebalance solves the exact proportional-cost equation so the target weight holds on post-trade wealth and every fee is charged on the actual trade, and the terminal liquidation is charged on the true terminal holding value. The leverage cap and the funding assumption are now parameters (`cap=CAP`, `borrow_rate=None`, which borrows at the cash rate as before); existing callers and signatures are unchanged. Exact self-financing moves recorded experiment numbers slightly (the old approximation overcharged buys and the stale-value liquidation, undercharged sells); committed results were not regenerated. New fixture: `tests/test_stage3_neural_cppi_3_ledger.py` (self-financing identity at every trade, an independent scalar reference, and zero-return / buy-and-hold / cap=1 / cap>1 / fee-only property cases).
 

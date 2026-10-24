@@ -2,8 +2,6 @@
 
 <h1 align="center">Neural-CPPI</h1>
 
-<p align="center">Learned allocation under portfolio floor constraints, benchmarked against classical CPPI.</p>
-
 <p align="center">
   <a href="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml"><img src="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml/badge.svg?label=CI&labelColor=24292f" alt="CI"></a>
   <a href="https://hub.xerj.org/contributors/FaiyazEnayet"><img src="https://hub.xerj.org/contributors/FaiyazEnayet/badge.svg" alt="XERJ Corpus Hub contributor"></a>

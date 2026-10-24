@@ -5,13 +5,13 @@
 <p align="center">
   <a href="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml"><img src="https://github.com/FaiyazEnayet/neural-cppi/actions/workflows/ci.yml/badge.svg?label=CI&labelColor=24292f" alt="CI"></a>
   <a href="https://hub.xerj.org/contributors/FaiyazEnayet"><img src="https://hub.xerj.org/contributors/FaiyazEnayet/badge.svg" alt="XERJ Corpus Hub contributor"></a>
-  <img src="https://img.shields.io/badge/license-MIT-996515?labelColor=24292f" alt="License: MIT">
+  <img src="https://img.shields.io/badge/license-MIT-c6a66b?labelColor=24292f" alt="License: MIT">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?labelColor=24292f" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/built%20with-PyTorch%20%2B%20NumPy-301934?labelColor=24292f" alt="Built with PyTorch + NumPy">
 </p>
 
 <p align="center">
-  <a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="https://img.shields.io/badge/Open-Dashboard-c6a66b?style=for-the-badge&labelColor=111215" alt="Open Dashboard"></a>
+  <a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="https://img.shields.io/badge/Open-Dashboard-996515?style=for-the-badge&labelColor=111215" alt="Open Dashboard"></a>
   <a href="#method"><img src="https://img.shields.io/badge/Explore-Method-414348?style=for-the-badge&labelColor=111215" alt="Explore Method"></a>
   <a href="#run-locally"><img src="https://img.shields.io/badge/Run-Locally-1a1b1e?style=for-the-badge&labelColor=111215" alt="Run Locally"></a>
 </p>

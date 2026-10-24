@@ -27,6 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from dhl.backtest.execution import rebalance_single as _rebalance_holding
 from dhl.markets.real import block_bootstrap_paths, load_spy_daily, log_returns
 
 # --- experiment settings -------------------------------------------------
@@ -213,36 +214,6 @@ def _crash_features(S):
     }
 
 
-def _rebalance_holding(wealth, holding, weight, cost_rate):
-    """Exact self-financing rebalance to a target risky weight.
-
-    The target weight applies to post-trade wealth, so the new risky
-    holding ``H'`` solves the piecewise-linear equation
-
-        H' = w * (V - cost_rate * |H' - H|)
-
-    with one branch per trade direction (the branch is decided by
-    comparing the target weight ``w`` with the current weight
-    ``H / V``; both branches agree at ``w == H / V``, where the trade
-    is zero):
-
-        buy  (w >= H/V):  H' = w (V + c H) / (1 + w c)
-        sell (w <  H/V):  H' = w (V - c H) / (1 - w c)
-
-    Returns ``(holding_post, fee)`` with
-    ``fee = cost_rate * |H' - H|`` charged on the actual trade.
-    Differentiable in wealth, holding and weight.
-    """
-    current = holding / wealth.clamp_min(1e-8)
-    buy = weight * (wealth + cost_rate * holding) \
-        / (1.0 + weight * cost_rate)
-    sell = weight * (wealth - cost_rate * holding) \
-        / (1.0 - weight * cost_rate).clamp_min(1e-9)
-    post = torch.where(weight >= current, buy, sell)
-    fee = cost_rate * (post - holding).abs()
-    return post, fee
-
-
 def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
             return_path=False, cap=CAP, borrow_rate=None,
             return_ledger=False):
@@ -260,7 +231,8 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
     is (cash, risky units); at each rebalancing date the risky holding
     is moved to the target weight of post-trade wealth by solving the
     exact proportional-cost rebalance equation (see
-    ``_rebalance_holding``), cash pays for the trade plus its fee, and
+    ``dhl.backtest.execution.rebalance_single``), cash pays for the
+    trade plus its fee, and
     the fee is charged on the actual traded notional. Between dates,
     cash earns ``r`` while nonnegative and ``borrow_rate`` while
     negative (borrowing); ``borrow_rate=None`` borrows at ``r``, the

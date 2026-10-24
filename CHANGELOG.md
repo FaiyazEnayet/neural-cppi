@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- `rollout_multi` in `src/dhl/experiments/cppi_multi.py` now routes every rebalance through the shared trade-accounting kernel in `src/dhl/backtest/execution.py`: holdings move to the target weights of post-fee wealth and the fee is charged on the actual traded notional, so a fully invested path can no longer end a date with negative cash from fees alone. The old code charged the fee on the pre-fee target minus the grown old holding and then set the holding to the pre-fee target, so executed and charged notionals disagreed. The single-asset `rollout` now imports the same kernel's closed form with unchanged numbers (a golden fixture pins the previous terminal wealths exactly). The kernel solves the post-fee wealth equation exactly by scanning trade-sign breakpoints, stays differentiable for training, and keeps cash nonnegative for long-only weights. New tests: `tests/test_execution.py` (exact accounting identity on random fixtures, analytic buy/sell costs, all-cash charging no fees, an independent NumPy reference for a multi-asset rollout, float64/float32 agreement, jump properties, finite gradients, and the single-asset golden fixture).
+
 ### Docs
 - Centered the README header: uniform dark badge labels and three action buttons in the dashboard palette (Open Dashboard, Explore Method, Run Locally). The XERJ Corpus Hub contributor badge stays in the badge row.
 

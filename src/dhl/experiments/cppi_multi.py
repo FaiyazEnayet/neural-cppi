@@ -32,6 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from dhl.backtest.execution import rebalance_multi
 from dhl.experiments.cppi_learned import (
     CAP,
     COST_RATE,
@@ -162,12 +163,23 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
     wealth per path; with return_path=True also the wealth and floor
     paths. The final wealth path point is post-liquidation wealth,
     so W[:, -1] == V_T exactly.
+
+    Accounting is an explicit (cash, holdings) ledger, not a wealth
+    shortcut. Each rebalance goes through the shared kernel
+    ``dhl.backtest.execution.rebalance_multi``: holdings move to the
+    target weights of post-fee wealth and the fee is charged on the
+    actual traded notional, so a fully invested path never ends a
+    date with negative cash from fees alone. Between dates cash earns
+    ``r`` (cash is always nonnegative for long-only weights, so no
+    borrowing convention is needed here) and holdings ride the price
+    moves. At the horizon the risky leg is liquidated at the terminal
+    prices and charged on its true terminal value.
     """
     n, steps_p1, na = P.shape
     steps = steps_p1 - 1
     T = steps * dt
     device, dtype = P.device, P.dtype
-    V = torch.full((n,), V0, device=device, dtype=dtype)
+    cash = torch.full((n,), V0, device=device, dtype=dtype)
     D = torch.zeros((n, na), device=device, dtype=dtype)
     growth = math.exp(r * dt)
     rets = P[:, 1:, :] / P[:, :-1, :]
@@ -175,6 +187,7 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         [_vol_features(P[:, :, k]) for k in range(na)], dim=2
     )
     trail = _trail_features(P)
+    V = cash.clone()
     wealth_path = [V.clone()] if return_path else None
     floor_vals = []
 
@@ -190,15 +203,17 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         w = weight_fn(i, V, tau_frac, cushion, vols[:, i, :],
                       trail[:, i, :], floor_t)
         w_risky = w[:, :na]
-        prev_grown = D if i == 0 else D * rets[:, i - 1, :]
-        target = w_risky * V.unsqueeze(1)
-        V = V - cost_rate * (target - prev_grown).abs().sum(dim=1)
-        D = target
-        V = (V - D.sum(dim=1)) * growth + (D * rets[:, i, :]).sum(dim=1)
+        holdings = D if i == 0 else D * rets[:, i - 1, :]
+        V = cash + holdings.sum(dim=1)
+        D, cash_post, _fee, _Vp = rebalance_multi(V, holdings, w_risky,
+                                                  cost_rate)
+        cash = cash_post * growth
+        V = cash + (D * rets[:, i, :]).sum(dim=1)
         if return_path:
             wealth_path.append(V.clone())
 
-    V = V - cost_rate * D.abs().sum(dim=1)  # liquidate at T
+    holdings_T = D * rets[:, steps - 1, :]
+    V = cash + holdings_T.sum(dim=1) - cost_rate * holdings_T.abs().sum(dim=1)
     if return_path:
         # Same terminal convention as rollout: the final path point is
         # post-liquidation wealth, so W[:, -1] == V_T exactly.

@@ -13,6 +13,10 @@ before ``train_end`` in the training set. Nothing from the future
 leaks in: no shuffling, no shared blocks across the boundary.
 """
 
+import hashlib
+import json
+import math
+
 import numpy as np
 import torch
 
@@ -172,3 +176,279 @@ def paired_evaluate(strategies, S_np, rollout_fn, floor,
             }
         results[name] = m
     return results
+
+
+# ---------------------------------------------------------------------------
+# NC6: dependent-path uncertainty.
+#
+# The paired mean/std in ``paired_evaluate`` treats every window as an
+# independent draw. It is not: sliding windows share bars, and a
+# bootstrap over training paths is not a sample of out-of-time
+# markets. The helpers below report uncertainty over what was actually
+# observed: strictly nonoverlapping real windows, or whole calendar
+# blocks resampled as units. This block bootstrap is an EVALUATION
+# device for confidence intervals; it is not the training-time block
+# bootstrap in ``dhl.markets.real`` that generates synthetic paths.
+# ---------------------------------------------------------------------------
+
+def nonoverlapping_windows(prices, path_len, s0=100.0):
+    """Real historical price paths with no shared price bar.
+
+    Delegates to :func:`contiguous_paths` with stride ``path_len + 1``,
+    so consecutive windows are separated by one bar: window ``k``
+    covers bars ``[s, s + path_len]`` and the next starts at
+    ``s + path_len + 1``. The inter-window return is dropped by
+    design; that is the cost of independence. This matches the
+    disjoint-window count in ``dhl.eval.registry.summarize_windows``.
+    Returns ``(paths, starts)`` as in :func:`contiguous_paths`.
+    """
+    if path_len < 1:
+        raise ValueError(f"path_len must be >= 1, got {path_len}")
+    return contiguous_paths(prices, path_len, stride=path_len + 1, s0=s0)
+
+
+def calendar_block_ids(dates, freq="M"):
+    """Calendar block label per date string (``YYYY-MM-DD``).
+
+    ``freq`` is ``"M"`` (``YYYY-MM``), ``"Q"`` (``YYYY-Qn``) or ``"Y"``
+    (``YYYY``). Labels are aligned with the input order. Raises on an
+    unknown frequency or a malformed date instead of inventing a
+    block.
+    """
+    if freq not in ("M", "Q", "Y"):
+        raise ValueError(f"freq must be 'M', 'Q' or 'Y', got {freq!r}")
+    out = []
+    for d in dates:
+        if (not isinstance(d, str) or len(d) < 10
+                or d[4] != "-" or d[7] != "-"):
+            raise ValueError(f"malformed date {d!r}, expected YYYY-MM-DD")
+        year, month = d[0:4], d[5:7]
+        try:
+            m = int(month)
+        except ValueError:
+            raise ValueError(f"malformed month in date {d!r}") from None
+        if not 1 <= m <= 12:
+            raise ValueError(f"month out of range in date {d!r}")
+        if freq == "M":
+            out.append(f"{year}-{month}")
+        elif freq == "Q":
+            out.append(f"{year}-Q{(m - 1) // 3 + 1}")
+        else:
+            out.append(year)
+    return out
+
+
+def block_bootstrap_ci(values, block_ids, n_boot=2000, seed=0,
+                       alpha=0.05):
+    """Percentile CI for the mean, resampling whole blocks as units.
+
+    ``values`` is a 1-D array of per-path statistics (e.g. paired
+    terminal-wealth gaps) and ``block_ids`` labels the market block
+    each path belongs to (see :func:`calendar_block_ids`). Each
+    replicate draws ``n_blocks`` blocks with replacement using
+    ``numpy.random.default_rng(seed).integers`` and averages the
+    pooled values; the CI is the ``alpha/2`` and ``1 - alpha/2``
+    percentiles of the replicate means. With a single block the CI
+    collapses to the point estimate: one block carries no information
+    about cross-block variation, and the function says so by
+    returning a zero-width interval rather than a spurious spread.
+    """
+    vals = np.asarray(values, dtype=float)
+    blocks = list(block_ids)
+    if vals.ndim != 1 or len(vals) == 0:
+        raise ValueError("values must be a nonempty 1-D array")
+    if len(blocks) != len(vals):
+        raise ValueError(
+            f"block_ids length {len(blocks)} != values length {len(vals)}")
+    if n_boot < 1:
+        raise ValueError(f"n_boot must be >= 1, got {n_boot}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must lie in (0, 1), got {alpha}")
+    uniq, inverse = np.unique(blocks, return_inverse=True)
+    groups = [np.flatnonzero(inverse == g) for g in range(len(uniq))]
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, len(groups), size=(n_boot, len(groups)))
+    boot_means = np.empty(n_boot)
+    for i, row in enumerate(draws):
+        pooled = np.concatenate([vals[groups[g]] for g in row])
+        boot_means[i] = pooled.mean()
+    pct = [100.0 * alpha / 2.0, 100.0 * (1.0 - alpha / 2.0)]
+    lo, hi = np.percentile(boot_means, pct)
+    return {
+        "mean": float(vals.mean()),
+        "ci_low": float(lo),
+        "ci_high": float(hi),
+        "n": int(len(vals)),
+        "n_blocks": int(len(groups)),
+        "n_boot": int(n_boot),
+        "seed": seed,
+        "alpha": float(alpha),
+        "method": "block-bootstrap percentile",
+    }
+
+
+def _binom_cdf(k, n, p):
+    """P(X <= k) for X ~ Binomial(n, p), log-sum-exp stable."""
+    if p <= 0.0:
+        return 1.0
+    if p >= 1.0:
+        return 1.0 if k >= n else 0.0
+    logs = [
+        math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+        + i * math.log(p) + (n - i) * math.log(1 - p)
+        for i in range(k + 1)
+    ]
+    m = max(logs)
+    return sum(math.exp(x - m) for x in logs) * math.exp(m)
+
+
+def clopper_pearson_upper(k, n, alpha=0.05):
+    """Exact one-sided upper bound on a breach probability.
+
+    Given ``k`` breaches in ``n`` paths, returns the smallest ``p``
+    with P(Binomial(n, p) <= k) <= ``alpha``: the exact
+    Clopper-Pearson upper limit at confidence ``1 - alpha``. For
+    zero observed breaches this has the closed form
+    ``1 - alpha ** (1 / n)`` (the exact finite-sample statement
+    behind the rule of three). No normal approximation is used, so
+    the bound stays valid for small ``n`` and for ``k = 0``.
+    """
+    if n < 1 or k < 0 or k > n:
+        raise ValueError(f"need 0 <= k <= n with n >= 1, got k={k}, n={n}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must lie in (0, 1), got {alpha}")
+    if k == n:
+        return 1.0
+    if k == 0:
+        return 1.0 - alpha ** (1.0 / n)
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if _binom_cdf(k, n, mid) > alpha:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def frozen_config_sha256(config):
+    """SHA-256 of a hyperparameter config in canonical JSON form.
+
+    Key order does not affect the hash, so the same frozen config
+    always records the same fingerprint. Non-JSON-serializable
+    values raise instead of being coerced into a meaningless string.
+    """
+    canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+POST_SELECTION_LABEL = (
+    "POST-SELECTION: these test episodes were inspected during "
+    "selection, so this interval is not a fresh-holdout CI and must "
+    "not be reported as unseen performance."
+)
+
+
+def paired_dependent_summary(wealth_a, wealth_b, block_ids, floor,
+                             frozen_config=None, n_boot=2000, seed=0,
+                             alpha=0.05, previously_viewed=False):
+    """Point estimates plus dependent-data CIs for a paired gap.
+
+    ``wealth_a`` / ``wealth_b`` are per-path terminal wealths on the
+    SAME paths (the paired comparison: same markets, so the gap is
+    the policy, not the draw). ``block_ids`` labels the market block
+    of each path; the block bootstrap resamples market blocks only.
+    Optimization seeds never enter the resampling: they belong in
+    ``frozen_config``, whose SHA-256 is recorded so the evaluation
+    is tied to hyperparameters frozen before it ran. When
+    ``frozen_config`` is None the output says so explicitly instead
+    of implying a frozen final evaluation. When ``previously_viewed``
+    is True the output carries the post-selection label: the CI is
+    reported, but it is not a fresh-holdout CI.
+
+    Breach bounds are exact Clopper-Pearson upper limits on the
+    terminal breach rate (wealth < floor) at confidence
+    ``1 - alpha``; with zero observed breaches the bound is the
+    closed form ``1 - alpha ** (1 / n)``, not zero.
+    """
+    a = np.asarray(wealth_a, dtype=float)
+    b = np.asarray(wealth_b, dtype=float)
+    if a.ndim != 1 or b.ndim != 1 or len(a) != len(b):
+        raise ValueError("wealth_a and wealth_b must be equal-length 1-D")
+    if len(list(block_ids)) != len(a):
+        raise ValueError("block_ids must align with the wealth arrays")
+    gap = a - b
+    gap_ci = block_bootstrap_ci(gap, block_ids, n_boot=n_boot, seed=seed,
+                                alpha=alpha)
+    a_ci = block_bootstrap_ci(a, block_ids, n_boot=n_boot, seed=seed,
+                              alpha=alpha)
+    b_ci = block_bootstrap_ci(b, block_ids, n_boot=n_boot, seed=seed,
+                              alpha=alpha)
+    k_a = int((a < floor).sum())
+    k_b = int((b < floor).sum())
+    out = {
+        "n_paths": int(len(a)),
+        "n_blocks": gap_ci["n_blocks"],
+        "mean_wealth_a": float(a.mean()),
+        "mean_wealth_b": float(b.mean()),
+        "paired_gap": {
+            "mean": float(gap.mean()),
+            "ci_low": gap_ci["ci_low"],
+            "ci_high": gap_ci["ci_high"],
+        },
+        "wealth_a_ci": {
+            "mean": a_ci["mean"], "ci_low": a_ci["ci_low"],
+            "ci_high": a_ci["ci_high"],
+        },
+        "wealth_b_ci": {
+            "mean": b_ci["mean"], "ci_low": b_ci["ci_low"],
+            "ci_high": b_ci["ci_high"],
+        },
+        "p_breach_terminal_a": float((a < floor).mean()),
+        "p_breach_terminal_b": float((b < floor).mean()),
+        "breach_upper_bound_a": clopper_pearson_upper(k_a, len(a), alpha),
+        "breach_upper_bound_b": clopper_pearson_upper(k_b, len(b), alpha),
+        "alpha": float(alpha),
+        "hyperparameters_frozen": frozen_config is not None,
+        "post_selection": bool(previously_viewed),
+    }
+    if frozen_config is not None:
+        out["frozen_config_sha256"] = frozen_config_sha256(frozen_config)
+    else:
+        out["frozen_config_note"] = (
+            "no frozen config supplied; this is not a frozen final "
+            "evaluation")
+    if previously_viewed:
+        out["post_selection_label"] = POST_SELECTION_LABEL
+    return out
+
+
+_SENSITIVITY_KEYS = ("horizon", "floor", "block_length", "mean_paired_gap",
+                     "ci_low", "ci_high", "n_paths", "n_blocks")
+
+
+def sensitivity_report(evaluations):
+    """Tabulate paired evaluations across horizon/floor/block length.
+
+    Each input dict must carry ``horizon``, ``floor``,
+    ``block_length``, ``mean_paired_gap``, ``ci_low``, ``ci_high``,
+    ``n_paths`` and ``n_blocks`` (as produced by
+    :func:`paired_dependent_summary`); ``breach_upper_bound`` is
+    carried through when present. The output adds ``ci_width`` per
+    row and preserves the inputs, so a reader can see how the point
+    estimate, the interval width, the path count and the breach bound
+    move when the horizon, the floor, or the block length changes.
+    Missing keys raise instead of producing a silently partial row.
+    """
+    rows = []
+    for ev in evaluations:
+        missing = [k for k in _SENSITIVITY_KEYS if k not in ev]
+        if missing:
+            raise ValueError(
+                f"sensitivity row missing keys {missing}: {ev!r}")
+        row = {k: ev[k] for k in _SENSITIVITY_KEYS}
+        row["ci_width"] = float(ev["ci_high"]) - float(ev["ci_low"])
+        if "breach_upper_bound" in ev:
+            row["breach_upper_bound"] = ev["breach_upper_bound"]
+        rows.append(row)
+    return rows

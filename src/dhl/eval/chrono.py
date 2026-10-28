@@ -17,15 +17,22 @@ import numpy as np
 import torch
 
 
-def split_returns_by_date(dates, returns, train_end, val_end):
+def split_returns_by_date(dates, returns, train_end, val_end,
+                          val_start=None):
     """Split a return series into train/val/test by calendar date.
 
     ``dates``: date strings aligned with prices (len = len(returns)+1).
     Every return whose end date is < ``train_end`` goes to train;
-    < ``val_end`` goes to validation; the rest goes to test.
+    in ``[val_start, val_end)`` goes to validation; >= ``val_end``
+    goes to test. ``val_start`` defaults to ``train_end`` (the old
+    behavior); pass a later ``val_start`` when the span between the
+    training end and the validation start belongs to no bucket, e.g.
+    a reserved stress year that has its own named test set. Returns
+    in that gap are dropped from all three buckets by design, so the
+    bucket counts then sum to less than the input length.
 
     Returns ``{"train": ..., "val": ..., "test": ...}`` plus the
-    matching ``{"train_dates": ...}`` end-date lists for auditing.
+    matching end-date lists for auditing.
     """
     dates = list(dates)
     rets = np.asarray(returns, dtype=float)
@@ -34,9 +41,14 @@ def split_returns_by_date(dates, returns, train_end, val_end):
             f"dates must align with prices: got {len(dates)} dates for "
             f"{len(rets)} returns"
         )
+    if val_start is not None and not train_end <= val_start <= val_end:
+        raise ValueError(
+            f"val_start {val_start} must lie between train_end "
+            f"{train_end} and val_end {val_end}")
     end_dates = dates[1:]
     out, out_dates = {}, {}
-    bounds = (("train", None, train_end), ("val", train_end, val_end),
+    bounds = (("train", None, train_end),
+              ("val", val_start or train_end, val_end),
               ("test", val_end, None))
     for name, lo, hi in bounds:
         mask = np.array([

@@ -10,6 +10,16 @@ gaps are policy gaps, not luck of the draw. 2020 bars outside the
 COVID stress window are reserved and belong to no train/val/test
 bucket; the episode registry records that explicitly.
 
+Every results table carries a metadata block (frequency, training
+cutoff, proxy, dividends, cash convention, seen flag) built by
+``chrono_table_metadata`` and validated by
+``dhl.markets.history_ext``. The 2008 crisis window is an in-sample
+diagnostic for a pre-2020-trained model, never an unseen crash; a
+model trained strictly before 2008 is what earns the unseen label.
+The monthly 1929-1933 proxy tier is a metadata definition only: no
+Depression series of any frequency is loaded, and daily Depression
+claims are refused outright.
+
 Stocks and cash only. No derivatives, no shorting, no leverage.
 
 Run: ``python -m dhl.experiments.chrono_eval [--epochs 150]``
@@ -49,6 +59,14 @@ from dhl.experiments.cppi_learned import (
     seeded_policy,
     train_cppi_policy,
 )
+from dhl.markets.history_ext import (
+    CASH_CONVENTION,
+    SPY_DAILY_PROXY,
+    SPY_DIVIDENDS,
+    stress_tiers,
+    table_metadata,
+    validate_table_metadata,
+)
 from dhl.markets.real import load_spy_daily, log_returns
 
 TRAIN_END = "2020-01-01"   # train strictly before 2020: COVID unseen
@@ -83,6 +101,42 @@ def _print_table(title, results, reference):
         )
 
 
+def chrono_table_metadata():
+    """Validated metadata blocks for every table run_chrono_eval writes.
+
+    Each block states frequency, training cutoff, proxy, dividends,
+    and cash convention, plus the seen flag. Validation is
+    fail-closed: a bad block raises here, before any table is written.
+    The in-sample bootstrap table is resampled from training data, so
+    its seen flag is True by construction.
+    """
+    tiers = stress_tiers()
+    tables = {
+        "test_2023plus": table_metadata(tiers["post_freeze_reserved"]),
+        "val_2021_2022": table_metadata(
+            tiers["validation_2021_2022"]),
+        "covid_crash": table_metadata(tiers["covid_held_out"]),
+        "insample_bootstrap": {
+            "tier": "insample_bootstrap",
+            "frequency": "block-bootstrap resample of daily",
+            "training_start": "2007-01-01",
+            "training_cutoff": TRAIN_END,
+            "eval_start": "2007-01-01",
+            "eval_end": TRAIN_END,
+            "proxy": SPY_DAILY_PROXY,
+            "dividends": SPY_DIVIDENDS,
+            "cash_convention": CASH_CONVENTION,
+            "seen": True,
+            "previously_viewed": True,
+            "instruments": ["SPY"],
+            "freeze_date": None,
+        },
+    }
+    for meta in tables.values():
+        validate_table_metadata(meta)
+    return tables
+
+
 def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
     data = load_spy_daily()
     dates, prices = data["dates"], data["adjclose"]
@@ -105,6 +159,9 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
     registry = standard_chrono_registry()
     registry.validate_training_period(
         dates, dates[0], TRAIN_END, lookback_bars=WARM_LOOKBACK)
+
+    # --- every results table carries a validated metadata block ---
+    tables = chrono_table_metadata()
 
     results = {
         "splits": {k: {"n_returns": len(v),
@@ -165,6 +222,7 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
         results[f"test_2023plus_{hlen}d"] = {
             "window_starts": [test_dates[s] for s in starts],
             "windows": summarize_window_count(len(S), hlen, stride),
+            "metadata": tables["test_2023plus"],
             "strategies": res,
         }
 
@@ -180,6 +238,7 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
                  reference)
     results["val_2021_2022_63d"] = {
         "windows": summarize_window_count(len(S_val), 63, 10),
+        "metadata": tables["val_2021_2022"],
         "strategies": res_val}
 
     # --- test set 3: COVID crash stress, model never saw it ---
@@ -193,6 +252,7 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
     results["covid_crash_30d"] = {
         "window_starts": cov_starts,
         "windows": summarize_window_count(len(S_cov), 30, 1),
+        "metadata": tables["covid_crash"],
         "strategies": res_cov}
 
     # --- reference: same strategies on in-sample bootstrap (old method) ---
@@ -201,7 +261,9 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
                                reference=reference)
     _print_table("in-sample bootstrap (old method), 63d", res_boot,
                  reference)
-    results["insample_bootstrap_63d"] = {"strategies": res_boot}
+    results["insample_bootstrap_63d"] = {
+        "metadata": tables["insample_bootstrap"],
+        "strategies": res_boot}
 
     os.makedirs(OUTDIR, exist_ok=True)
     with open(os.path.join(OUTDIR, "metrics.json"), "w") as f:

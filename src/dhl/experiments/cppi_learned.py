@@ -38,6 +38,7 @@ DT = 1.0 / 252.0  # daily rebalancing
 COST_RATE = 0.002  # 20 bps proportional cost on each rebalance
 CAP = 1.5  # max risky weight for every strategy (apples to apples)
 BLOCK_LEN = 21
+WARM_LOOKBACK = 60  # pre-window observations for warm feature context
 HORIZONS = (30, 63)  # trading days
 MULTIPLIERS = (3, 4, 5)
 N_EPOCHS = 200
@@ -214,9 +215,45 @@ def _crash_features(S):
     }
 
 
+def describe_protocol(history):
+    """Name the feature-context protocol: warm when pre-window prices
+    are supplied, cold when features start from zero.
+
+    Warm and cold are separate benchmark versions: results keyed by one
+    must never be mixed with the other, because their first-trade
+    features differ by construction.
+    """
+    return "warm" if history is not None else "cold"
+
+
+def _prepare_history(history, n_paths, device, dtype):
+    """Validate and broadcast pre-window prices.
+
+    Accepts a shared 1-D path (n_hist,) or a per-path (n_paths, n_hist)
+    array. Returns a (n_paths, n_hist) tensor, or None for cold starts.
+    Anything else raises ValueError: a malformed history must fail
+    loudly rather than silently misaligning features.
+    """
+    if history is None:
+        return None
+    h = torch.as_tensor(history, device=device, dtype=dtype)
+    if h.dim() == 1:
+        if h.shape[0] == 0:
+            raise ValueError("history must be non-empty")
+        return h.unsqueeze(0).expand(n_paths, -1).contiguous()
+    if h.dim() == 2:
+        if h.shape[0] != n_paths or h.shape[1] == 0:
+            raise ValueError(
+                f"history shape {tuple(h.shape)} does not match "
+                f"({n_paths}, n_hist) with n_hist > 0")
+        return h
+    raise ValueError(
+        f"history must be 1-D or 2-D, got {h.dim()}-D")
+
+
 def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
             return_path=False, cap=CAP, borrow_rate=None,
-            return_ledger=False):
+            return_ledger=False, history=None):
     """Self-financing portfolio wealth under a dynamic allocation.
 
     S has shape (n_paths, n_steps + 1). weight_fn(i, V, tau_frac,
@@ -249,6 +286,16 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
     grown to the horizon as ``cash_terminal``, ``holding_terminal``,
     ``wealth_pre_liquidation``, ``liquidation_notional``,
     ``liquidation_fee``, ``cum_fees`` and ``terminal_wealth``.
+
+    ``history`` (optional): pre-window prices for feature context only,
+    shape (n_hist,) shared across paths or (n_paths, n_hist). Features
+    are computed on [history, S] and sliced to the window steps; the
+    trading interval itself is unchanged (wealth starts at V0, holdings
+    at zero, charges from t0), so changing history can only move policy
+    decisions, never pre-window profit or loss. Pass None (cold) for a
+    spliced block with no valid preceding context: features reset to
+    zero at the boundary instead of inventing a drawdown. The standard
+    warm history is WARM_LOOKBACK actual trading observations.
     """
     n, steps_p1 = S.shape
     steps = steps_p1 - 1
@@ -257,7 +304,21 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
     r_borrow = r if borrow_rate is None else borrow_rate
     cash = torch.full((n,), V0, device=device, dtype=dtype)
     units = torch.zeros(n, device=device, dtype=dtype)  # risky units held
-    feats_full = _crash_features(S)
+    # Feature-history context is separate from the trading interval.
+    # With history, features are computed on [history, S] and sliced to
+    # the window steps, so the first trade sees real pre-window state;
+    # wealth still starts at V0, holdings at zero, and charges at t0.
+    # Without history (cold), features start at zero: that is the reset
+    # semantics for a spliced block with no valid preceding context,
+    # never a claim that the market was calm. The standard warm history
+    # is WARM_LOOKBACK actual trading observations.
+    hist = _prepare_history(history, n, device, dtype)
+    if hist is None:
+        feats_full = _crash_features(S)
+        n_hist = 0
+    else:
+        n_hist = hist.shape[1]
+        feats_full = _crash_features(torch.cat([hist, S], dim=1))
     path = [torch.full((n,), V0, device=device, dtype=dtype)] \
         if return_path else None
     rec = [] if return_ledger else None
@@ -268,7 +329,7 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
         V = cash + holding
         tau_frac = (T - i * dt) / T
         cushion = torch.clamp((V - floor) / V.clamp_min(1e-8), -1.0, 1.0)
-        feats = {k: v[:, i] for k, v in feats_full.items()}
+        feats = {k: v[:, n_hist + i] for k, v in feats_full.items()}
         w = torch.as_tensor(weight_fn(i, V, tau_frac, cushion, feats),
                             device=device, dtype=dtype)
         w = torch.clamp(w, min=0.0, max=cap)
@@ -453,11 +514,22 @@ def train_cppi_policy(policy, sampler, horizon_days, n_epochs=N_EPOCHS,
     return history
 
 
-def evaluate(weight_fn, S_np, floor=FLOOR):
-    """Metrics on held-out paths: mean/std wealth, breach probabilities."""
+def evaluate(weight_fn, S_np, floor=FLOOR, history=None,
+             context_reserved=False):
+    """Metrics on held-out paths: mean/std wealth, breach probabilities.
+
+    ``history`` passes pre-window prices through to rollout for warm
+    features; ``context_reserved`` labels a window whose feature
+    context extends into a reserved period. Both are recorded in the
+    returned metrics so warm, cold, and reserved-context runs are never
+    mixed under one name.
+    """
     S = torch.as_tensor(np.asarray(S_np), dtype=torch.float32)
+    hist = None
+    if history is not None:
+        hist = torch.as_tensor(np.asarray(history), dtype=torch.float32)
     with torch.no_grad():
-        V_T, path = rollout(S, weight_fn, return_path=True)
+        V_T, path = rollout(S, weight_fn, return_path=True, history=hist)
     V_T = V_T.numpy()
     wealth_min = path.numpy().min(axis=1)
     return {
@@ -466,6 +538,9 @@ def evaluate(weight_fn, S_np, floor=FLOOR):
         "p_breach_terminal": float((V_T < floor).mean()),
         "p_breach_anytime": float((wealth_min < floor).mean()),
         "mean_min_wealth": float(wealth_min.mean()),
+        "protocol": describe_protocol(history),
+        "history_days": 0 if hist is None else int(hist.shape[-1]),
+        "context_reserved": bool(context_reserved),
     }
 
 

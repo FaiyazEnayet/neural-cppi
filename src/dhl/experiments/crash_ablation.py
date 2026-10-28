@@ -1,9 +1,16 @@
 """Ablation study: which crash-robustness interventions actually help?
 
 Controlled comparison of learned portfolio-insurance policies that
-differ in exactly one intervention each, all trained with identical
-budgets (epochs, batch, seed, architecture) on strictly pre-2020
-data. COVID crash and 2023+ sets are held-out -- nothing is tuned
+differ in exactly one intervention each, all trained with matched
+budgets (epochs, batch, architecture) under one shared seed schedule
+on strictly pre-2020 data. Every variant is trained once per
+schedule seed, so a variant gap can be read per seed instead of
+confounding the intervention with a per-variant seed offset (the
+original run used seed, seed+1, ..., seed+7 across variants).
+Variants with different feature counts have different parameter
+shapes by construction; the shared schedule compares their
+replicated training outcomes, it does not pretend their tensors
+match. COVID crash and 2023+ sets are held-out -- nothing is tuned
 on them.
 
 Variants:
@@ -47,12 +54,14 @@ from dhl.eval.chrono import (
     split_returns_by_date,
     window_paths_in_range,
 )
+from dhl.eval.registry import standard_chrono_registry
 from dhl.experiments.cppi_learned import (
     BLOCK_LEN,
     CAP,
     FLOOR,
     SEED,
     V0,
+    WARM_LOOKBACK,
     CPPIPolicy,
     _crash_weights,
     _learned_weight_fn,
@@ -72,12 +81,81 @@ COVID_START = "2020-02-19"
 COVID_END = "2020-05-01"
 N_EPOCHS = 100
 BATCH_SIZE = 1024
+N_SEEDS = 3
 HORIZON = 63
 FEATS_FULL = ("vol", "vol_ratio", "drawdown", "panic_z")
 FEATS_BASE = ("vol",)
 CRASH_MULTS = (0.0, 1.0, 3.0, 5.0)
 
+# (variant name, training window, feature names, crash_mult, CPPI layer)
+# The E sweep shares the base spec and varies crash_mult only.
+VARIANT_SPECS = [
+    ("A", "2015", FEATS_BASE, 0.0, False),
+    ("B", "2007", FEATS_BASE, 0.0, False),
+    ("C", "2007", FEATS_FULL, 0.0, False),
+    ("F", "2007", FEATS_FULL, 3.0, True),
+    ("F_no2008", "2015", FEATS_FULL, 3.0, True),
+    ("F_nofeats", "2007", FEATS_BASE, 3.0, True),
+    ("F_noloss", "2007", FEATS_FULL, 0.0, True),
+]
+
 OUTDIR = os.path.join("runs", "crash_ablation")
+
+
+def seed_schedule(base_seed, n_seeds):
+    """One shared seed list applied to every variant.
+
+    Every variant trains once per schedule seed with matched budgets,
+    so per-seed gaps separate seed noise from design differences.
+    """
+    if n_seeds < 1:
+        raise ValueError(f"n_seeds must be >= 1, got {n_seeds}")
+    return tuple(base_seed + i for i in range(n_seeds))
+
+
+def variant_training_plan(base_seed, n_seeds):
+    """Machine-checkable training plan: (variant, seed) pairs.
+
+    Every spec, including each E-sweep crash_mult, appears once per
+    schedule seed and never with a per-variant seed offset.
+    """
+    plan = []
+    for seed in seed_schedule(base_seed, n_seeds):
+        for name, _, _, _, _ in VARIANT_SPECS:
+            plan.append((name, seed))
+        for cm in CRASH_MULTS:
+            plan.append((f"E_mult{cm}", seed))
+    return plan
+
+
+def summarize_across_seeds(per_seed, reference="G"):
+    """Across-seed summary that preserves per-seed gaps.
+
+    ``per_seed`` maps seed -> {strategy: metrics} where each metrics
+    dict holds ``mean_wealth`` and, for non-reference strategies, a
+    ``paired_gap_vs_<reference>`` dict with a ``mean``. Returns
+    per-strategy across-seed mean/sd plus the per-seed gap list, so a
+    mean improvement that flips sign across seeds stays visible.
+    """
+    strategies = sorted({name for seed_res in per_seed.values()
+                         for name in seed_res})
+    out = {"n_seeds": len(per_seed)}
+    for name in strategies:
+        means = [per_seed[s][name]["mean_wealth"] for s in per_seed
+                 if name in per_seed[s]]
+        entry = {
+            "mean_wealth_mean": float(np.mean(means)),
+            "mean_wealth_sd": float(np.std(means)),
+        }
+        gap_key = "paired_gap_vs_" + reference
+        gaps = [per_seed[s][name][gap_key]["mean"] for s in per_seed
+                if name in per_seed[s] and gap_key in per_seed[s][name]]
+        if gaps:
+            entry["paired_gap_mean"] = float(np.mean(gaps))
+            entry["paired_gap_sd"] = float(np.std(gaps))
+            entry["per_seed_gap"] = [float(g) for g in gaps]
+        out[name] = entry
+    return out
 
 
 def _train_variant(train_rets, feature_names, crash_mult, seed,
@@ -143,7 +221,55 @@ def _flash_crash_paths(n_paths=200, seed=0, s0=100.0):
     return S
 
 
-def run_ablation(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
+def _train_seed_policies(rets_2007, rets_2015, seed, n_epochs, batch_size):
+    """Train every variant spec once at one shared schedule seed."""
+    windows = {"2007": rets_2007, "2015": rets_2015}
+    policies = {}
+    for name, window, feats, cm, _layer in VARIANT_SPECS:
+        policies[name] = _train_variant(
+            windows[window], feats, cm, seed, n_epochs, batch_size,
+            label=f"{name} seed={seed}")
+    e_policies = {}
+    for cm in CRASH_MULTS:
+        e_policies[cm] = _train_variant(
+            rets_2007, FEATS_BASE, cm, seed, n_epochs, batch_size,
+            label=f"E mult={cm} seed={seed}")
+    return policies, e_policies
+
+
+def _strategies_for_seed(policies, e_policies):
+    """Strategy map for one seed's trained policies."""
+
+    def classic(m=4.0):
+        def fn(i, V, tau_frac, cushion, feats):
+            return classic_cppi_weight(V, multiplier=m, cap=CAP)
+        return fn
+
+    def layered(policy):
+        return cppi_constrained_weight_fn(
+            _learned_weight_fn(policy),
+            multiplier=4.0, emergency_vol=0.35,
+            emergency_multiplier=2.0)
+
+    strategies = {
+        "A_base": _learned_weight_fn(policies["A"]),
+        "B_+2008": _learned_weight_fn(policies["B"]),
+        "C_+feats": _learned_weight_fn(policies["C"]),
+        "D_+cppi_layer": layered(policies["B"]),
+        "F_all": layered(policies["F"]),
+        "F_no2008": layered(policies["F_no2008"]),
+        "F_nofeats": layered(policies["F_nofeats"]),
+        "F_noloss": layered(policies["F_noloss"]),
+        "G_classic_m4": classic(4.0),
+    }
+    # E sweep strategies (raw, no CPPI layer, to isolate the loss effect)
+    for cm, pol in e_policies.items():
+        strategies[f"E_mult{cm}"] = _learned_weight_fn(pol)
+    return strategies
+
+
+def run_ablation(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED,
+                 n_seeds=N_SEEDS):
     data = load_spy_daily()
     dates = list(data["dates"])
     prices = np.asarray(data["adjclose"])
@@ -162,71 +288,14 @@ def run_ablation(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
           f"({dates[1]} -> ...)", flush=True)
     print(f"  train 2015+: {len(rets_2015)} returns", flush=True)
 
-    # ---------------- train variants ----------------
-    policies = {}
-    policies["A"] = _train_variant(rets_2015, FEATS_BASE, 0.0, seed,
-                                   n_epochs, batch_size, label="A baseline")
-    policies["B"] = _train_variant(rets_2007, FEATS_BASE, 0.0, seed + 1,
-                                   n_epochs, batch_size, label="B +2008 data")
-    policies["C"] = _train_variant(rets_2007, FEATS_FULL, 0.0, seed + 2,
-                                   n_epochs, batch_size,
-                                   label="C +crash features")
-    # E sweep over crash_mult
-    e_policies = {}
-    for cm in CRASH_MULTS:
-        e_policies[cm] = _train_variant(
-            rets_2007, FEATS_BASE, cm, seed + 3, n_epochs, batch_size,
-            label=f"E mult={cm}")
-    policies["F"] = _train_variant(rets_2007, FEATS_FULL, 3.0, seed + 4,
-                                   n_epochs, batch_size, label="F all")
-    # Leave-one-out on F
-    policies["F_no2008"] = _train_variant(
-        rets_2015, FEATS_FULL, 3.0, seed + 5, n_epochs, batch_size,
-        label="F minus 2008 data")
-    policies["F_nofeats"] = _train_variant(
-        rets_2007, FEATS_BASE, 3.0, seed + 6, n_epochs, batch_size,
-        label="F minus crash features")
-    policies["F_noloss"] = _train_variant(
-        rets_2007, FEATS_FULL, 0.0, seed + 7, n_epochs, batch_size,
-        label="F minus crash loss")
+    # Fail-closed: training windows must touch no held-out episode bar,
+    # even through the feature lookback.
+    standard_chrono_registry().validate_training_period(
+        dates, dates[0], TRAIN_END, lookback_bars=WARM_LOOKBACK)
+    seeds = seed_schedule(seed, n_seeds)
+    print(f"  seed schedule: {seeds}", flush=True)
 
-    # ---------------- build strategies ----------------
-    def classic(m=4.0):
-        def fn(i, V, tau_frac, cushion, feats):
-            return classic_cppi_weight(V, multiplier=m, cap=CAP)
-        return fn
-
-    strategies = {
-        "A_base": _learned_weight_fn(policies["A"]),
-        "B_+2008": _learned_weight_fn(policies["B"]),
-        "C_+feats": _learned_weight_fn(policies["C"]),
-        "D_+cppi_layer": cppi_constrained_weight_fn(
-            _learned_weight_fn(policies["B"]),
-            multiplier=4.0, emergency_vol=0.35,
-            emergency_multiplier=2.0),
-        "F_all": cppi_constrained_weight_fn(
-            _learned_weight_fn(policies["F"]),
-            multiplier=4.0, emergency_vol=0.35,
-            emergency_multiplier=2.0),
-        "F_no2008": cppi_constrained_weight_fn(
-            _learned_weight_fn(policies["F_no2008"]),
-            multiplier=4.0, emergency_vol=0.35,
-            emergency_multiplier=2.0),
-        "F_nofeats": cppi_constrained_weight_fn(
-            _learned_weight_fn(policies["F_nofeats"]),
-            multiplier=4.0, emergency_vol=0.35,
-            emergency_multiplier=2.0),
-        "F_noloss": cppi_constrained_weight_fn(
-            _learned_weight_fn(policies["F_noloss"]),
-            multiplier=4.0, emergency_vol=0.35,
-            emergency_multiplier=2.0),
-        "G_classic_m4": classic(4.0),
-    }
-    # E sweep strategies (raw, no CPPI layer, to isolate the loss effect)
-    for cm, pol in e_policies.items():
-        strategies[f"E_mult{cm}"] = _learned_weight_fn(pol)
-
-    # ---------------- test sets ----------------
+    # ---------------- test sets (built once, shared by all seeds) ----
     test_mask = np.array(dates) >= VAL_END
     S_2023, _ = contiguous_paths(prices[test_mask], 63, stride=5, s0=V0)
     S_cov, _ = window_paths_in_range(
@@ -240,23 +309,32 @@ def run_ablation(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
                         ("covid_30d", S_cov),
                         ("flashcrash_63d", S_flash)):
         print(f"\n===== {set_name} =====", flush=True)
-        res = paired_evaluate(strategies, S, rollout, FLOOR,
-                              reference="G_classic_m4")
-        # worst shortfall + turnover per strategy
-        for name, fn in strategies.items():
-            St = torch.as_tensor(np.asarray(S), dtype=torch.float32)
-            with torch.no_grad():
-                V_T, path = rollout(St, fn, return_path=True)
-            W = path.numpy()
-            shortfall = np.maximum(FLOOR - W.min(axis=1), 0.0)
-            res[name]["worst_shortfall"] = float(shortfall.max())
-            res[name]["mean_shortfall"] = float(shortfall.mean())
-        # turnover on a subset (expensive) -- 2023+ only
-        if set_name == "2023plus_63d":
+        per_seed = {}
+        for s in seeds:
+            policies, e_policies = _train_seed_policies(
+                rets_2007, rets_2015, s, n_epochs, batch_size)
+            strategies = _strategies_for_seed(policies, e_policies)
+            res = paired_evaluate(strategies, S, rollout, FLOOR,
+                                  reference="G_classic_m4")
+            # worst shortfall per strategy
             for name, fn in strategies.items():
-                res[name]["turnover"] = _turnover(fn, S[:200])
-        _print_table(set_name, res)
-        results[set_name] = res
+                St = torch.as_tensor(np.asarray(S), dtype=torch.float32)
+                with torch.no_grad():
+                    V_T, path = rollout(St, fn, return_path=True)
+                W = path.numpy()
+                shortfall = np.maximum(FLOOR - W.min(axis=1), 0.0)
+                res[name]["worst_shortfall"] = float(shortfall.max())
+                res[name]["mean_shortfall"] = float(shortfall.mean())
+            # turnover on a subset (expensive) -- 2023+ only
+            if set_name == "2023plus_63d":
+                for name, fn in strategies.items():
+                    res[name]["turnover"] = _turnover(fn, S[:200])
+            per_seed[s] = res
+        across = summarize_across_seeds(per_seed,
+                                        reference="G_classic_m4")
+        _print_across_table(set_name, across)
+        results[set_name] = {"per_seed": per_seed,
+                             "across_seeds": across}
 
     os.makedirs(OUTDIR, exist_ok=True)
     with open(os.path.join(OUTDIR, "metrics.json"), "w") as f:
@@ -265,15 +343,21 @@ def run_ablation(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
     return results
 
 
-def _print_table(title, res):
-    print(f"\n--- {title} ---", flush=True)
-    print(f"{'strategy':16s}  {'E[V]':>7s}  {'P(brT)':>6s}  "
-          f"{'P(any)':>6s}  {'worstSF':>7s}  {'meanDD':>6s}", flush=True)
-    for name, m in res.items():
-        print(f"{name:16s}  {m['mean_wealth']:7.2f}  "
-              f"{m['p_breach_terminal']:6.3f}  {m['p_breach_anytime']:6.3f}  "
-              f"{m['worst_shortfall']:7.2f}  {m['mean_max_drawdown']:6.3f}",
-              flush=True)
+def _print_across_table(title, across):
+    print(f"\n--- {title} (across {across['n_seeds']} seeds) ---", flush=True)
+    print(f"{'strategy':16s}  {'E[V]':>12s}  {'gap_vs_G':>14s}  "
+          f"{'per-seed gap':>24s}", flush=True)
+    for name, m in sorted(across.items()):
+        if name == "n_seeds":
+            continue
+        gap = m.get("paired_gap_mean")
+        gap_s = (f"{gap:+6.2f} (sd {m['paired_gap_sd']:.2f})"
+                 if gap is not None else " " * 14)
+        per_seed = ", ".join(f"{g:+.2f}"
+                             for g in m.get("per_seed_gap", []))
+        print(f"{name:16s}  "
+              f"{m['mean_wealth_mean']:6.2f} (sd {m['mean_wealth_sd']:4.2f})  "
+              f"{gap_s:>14s}  {per_seed:>24s}", flush=True)
 
 
 def main():
@@ -281,9 +365,12 @@ def main():
     parser.add_argument("--epochs", type=int, default=N_EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--seeds", type=int, default=N_SEEDS,
+                        help="replications per variant on the shared "
+                             "seed schedule (default %(default)s)")
     args = parser.parse_args()
     run_ablation(n_epochs=args.epochs, batch_size=args.batch_size,
-                 seed=args.seed)
+                 seed=args.seed, n_seeds=args.seeds)
 
 
 if __name__ == "__main__":

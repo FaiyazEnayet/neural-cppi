@@ -6,7 +6,9 @@ windows of what actually happened afterwards -- the 2021-2022
 validation years, 2023-2026 as the test set, and the Feb-Apr 2020
 COVID crash as a stress case. No resampling in the test paths; every
 window is real history. All strategies see the identical paths, so
-gaps are policy gaps, not luck of the draw.
+gaps are policy gaps, not luck of the draw. 2020 bars outside the
+COVID stress window are reserved and belong to no train/val/test
+bucket; the episode registry records that explicitly.
 
 Stocks and cash only. No derivatives, no shorting, no leverage.
 
@@ -27,6 +29,10 @@ from dhl.eval.chrono import (
     split_returns_by_date,
     window_paths_in_range,
 )
+from dhl.eval.registry import (
+    standard_chrono_registry,
+    summarize_window_count,
+)
 from dhl.experiments.cppi_learned import (
     BLOCK_LEN,
     CAP,
@@ -34,6 +40,7 @@ from dhl.experiments.cppi_learned import (
     MULTIPLIERS,
     SEED,
     V0,
+    WARM_LOOKBACK,
     CPPIPolicy,
     _learned_weight_fn,
     block_bootstrap_paths,
@@ -45,6 +52,7 @@ from dhl.experiments.cppi_learned import (
 from dhl.markets.real import load_spy_daily, log_returns
 
 TRAIN_END = "2020-01-01"   # train strictly before 2020: COVID unseen
+VAL_START = "2021-01-01"   # validation is 2021-2022 only; 2020 reserved
 VAL_END = "2023-01-01"     # validate on 2021-2022, test on 2023+
 COVID_START = "2020-02-19"  # SPY pre-crash peak
 COVID_END = "2020-05-01"    # through the rebound's first leg
@@ -83,19 +91,36 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
           f"({dates[0]} -> {dates[-1]})", flush=True)
 
     # --- strict chronological split: nothing from 2020+ in training ---
+    # Validation starts at VAL_START, not TRAIN_END: 2020 bars belong
+    # to no bucket (reserved; the COVID window has its own test set).
     splits, split_dates = split_returns_by_date(
-        dates, rets, TRAIN_END, VAL_END)
+        dates, rets, TRAIN_END, VAL_END, val_start=VAL_START)
     for k in ("train", "val", "test"):
         ds = split_dates[k]
         print(f"  {k:5s}: {len(splits[k])} returns, "
               f"{ds[0]} -> {ds[-1]}", flush=True)
+
+    # --- fail-closed registry check: the training period must touch
+    # no held-out episode bar, even through the feature lookback ---
+    registry = standard_chrono_registry()
+    registry.validate_training_period(
+        dates, dates[0], TRAIN_END, lookback_bars=WARM_LOOKBACK)
 
     results = {
         "splits": {k: {"n_returns": len(v),
                        "first": split_dates[k][0],
                        "last": split_dates[k][-1]}
                    for k, v in splits.items()},
-        "train_end": TRAIN_END, "val_end": VAL_END,
+        "train_end": TRAIN_END, "val_start": VAL_START,
+        "val_end": VAL_END,
+        "registry": {
+            "episodes": [
+                {"name": e.name, "start": e.start, "end": e.end,
+                 "role": e.role,
+                 "independence_group": e.independence_group,
+                 "previously_viewed": e.previously_viewed}
+                for e in registry.episodes],
+        },
     }
 
     # --- train once, on pre-2020 bootstraps only ---
@@ -139,18 +164,23 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
         _print_table(f"2023+ contiguous, {hlen}d", res, reference)
         results[f"test_2023plus_{hlen}d"] = {
             "window_starts": [test_dates[s] for s in starts],
+            "windows": summarize_window_count(len(S), hlen, stride),
             "strategies": res,
         }
 
     # --- test set 2: validation years 2021-2022, contiguous ---
-    val_mask = (np.array(dates) >= TRAIN_END) & (np.array(dates) < VAL_END)
+    # Previously the mask started at TRAIN_END, so the "2021-2022"
+    # table actually covered 2020-2022 including the COVID year.
+    val_mask = (np.array(dates) >= VAL_START) & (np.array(dates) < VAL_END)
     val_prices = prices[val_mask]
     S_val, starts_val = contiguous_paths(val_prices, 63, stride=10, s0=V0)
     res_val = paired_evaluate(strategies, S_val, rollout, FLOOR,
                               reference=reference)
     _print_table("2021-2022 contiguous (validation), 63d", res_val,
                  reference)
-    results["val_2021_2022_63d"] = {"strategies": res_val}
+    results["val_2021_2022_63d"] = {
+        "windows": summarize_window_count(len(S_val), 63, 10),
+        "strategies": res_val}
 
     # --- test set 3: COVID crash stress, model never saw it ---
     S_cov, cov_starts = window_paths_in_range(
@@ -161,7 +191,9 @@ def run_chrono_eval(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, seed=SEED):
                               reference=reference)
     _print_table("COVID crash Feb-Apr 2020, 30d", res_cov, reference)
     results["covid_crash_30d"] = {
-        "window_starts": cov_starts, "strategies": res_cov}
+        "window_starts": cov_starts,
+        "windows": summarize_window_count(len(S_cov), 30, 1),
+        "strategies": res_cov}
 
     # --- reference: same strategies on in-sample bootstrap (old method) ---
     S_boot = train_sampler(5000, seed + 999)

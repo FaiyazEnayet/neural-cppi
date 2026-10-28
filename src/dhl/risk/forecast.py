@@ -19,6 +19,7 @@ forecast made with this code.
 """
 
 import numpy as np
+from statistics import NormalDist
 
 
 def _validate_series(values, name):
@@ -97,6 +98,32 @@ def adaptive_quantile_forecast(losses, window, alpha, gamma):
         realized = arr[window + i]
         miss = 1.0 if realized > level else 0.0
         level = level + float(gamma) * (miss - (1.0 - float(alpha)))
+    return out
+
+
+def gaussian_quantile_forecast(losses, window, alpha):
+    """Trailing Gaussian downside forecast, strictly causal.
+
+    Output ``i`` is the forecast for period ``window + i``: the
+    trailing mean plus the trailing population standard deviation
+    times the standard normal ``alpha`` quantile, both computed from
+    ``losses[i:i + window]`` only. This is the lightweight
+    probabilistic comparator the R8 contract names next to the
+    empirical rolling quantile and the adaptive conformal level. A
+    normal shape is an assumption, not a finding: when losses are
+    skewed or heavy-tailed this forecast can miscover, and the
+    experiment runner reports that instead of hiding it. ``alpha``
+    is the target coverage level in (0, 1), exclusive.
+    """
+    arr = _validate_series(losses, "losses")
+    _validate_window(window, arr.size)
+    if not 0.0 < float(alpha) < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    z = NormalDist().inv_cdf(float(alpha))
+    out = np.empty(arr.size - window, dtype=float)
+    for i in range(arr.size - window):
+        w = arr[i : i + window]
+        out[i] = float(np.mean(w)) + float(np.std(w, ddof=0)) * z
     return out
 
 

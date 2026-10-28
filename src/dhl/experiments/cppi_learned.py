@@ -278,6 +278,13 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
     value. Every trade is therefore exactly self-financing:
     cash + risky value + cumulative fees reconciles step by step.
 
+    Pre-trade wealth must stay positive: a step opening on
+    nonpositive wealth raises ValueError instead of trading on (the
+    kernel would otherwise produce negative holdings from a long-only
+    weight). A negative TERMINAL wealth is still returned honestly:
+    it means the final move bankrupted a path that was solvent at
+    its last trade, and no further trade feeds on it.
+
     With return_ledger=True, also returns a dict of stacked tensors
     recording the ledger at every trade: per-step (dim 1) ``price``,
     ``cash_pre``, ``units_pre``, ``holding_pre``, ``wealth_pre``,
@@ -327,6 +334,20 @@ def rollout(S, weight_fn, floor=FLOOR, r=R, dt=DT, cost_rate=COST_RATE,
         price = S[:, i]
         holding = units * price
         V = cash + holding
+        # Fail closed on nonpositive pre-trade wealth: the kernel
+        # requires V > 0, and trading on would produce negative
+        # holdings from a long-only weight (holdings = w * V' with
+        # V' < 0), i.e. implicit shorting, whose numbers would flow
+        # into breach statistics as if real. A path that is solvent
+        # at its last trade but crashes on the final move is NOT
+        # refused: its negative terminal wealth is returned honestly
+        # (bankruptcy at the horizon), since no further trade feeds
+        # on it.
+        if bool((V <= 0).any()):
+            raise ValueError(
+                f"rollout step {i}: nonpositive pre-trade wealth "
+                f"(min {float(V.min()):.6g}); refusing to trade a "
+                f"bankrupt path")
         tau_frac = (T - i * dt) / T
         cushion = torch.clamp((V - floor) / V.clamp_min(1e-8), -1.0, 1.0)
         feats = {k: v[:, n_hist + i] for k, v in feats_full.items()}

@@ -32,7 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dhl.backtest.execution import rebalance_multi
+from dhl.backtest.execution import rebalance_multi, validate_portfolio_weights
 from dhl.experiments.cppi_learned import (
     CAP,
     COST_RATE,
@@ -169,11 +169,25 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
     ``dhl.backtest.execution.rebalance_multi``: holdings move to the
     target weights of post-fee wealth and the fee is charged on the
     actual traded notional, so a fully invested path never ends a
-    date with negative cash from fees alone. Between dates cash earns
-    ``r`` (cash is always nonnegative for long-only weights, so no
-    borrowing convention is needed here) and holdings ride the price
-    moves. At the horizon the risky leg is liquidated at the terminal
-    prices and charged on its true terminal value.
+    date with negative cash from fees alone. Weights are validated
+    fail-closed every step (nonnegative, summing to one): the
+    long-only contract is enforced, not assumed, so no weight
+    function can silently short or borrow here; there is deliberately
+    no borrow-rate parameter, because an enforced long-only rollout
+    never borrows. Between dates cash earns ``r`` (cash is always
+    nonnegative for validated long-only weights) and holdings ride
+    the price moves. At the horizon the risky leg is liquidated at
+    the terminal prices and charged on its true terminal value.
+
+    Floor series indexing (return_path=True): ``F[j]`` is the floor
+    governing date-``j`` wealth, i.e. the floor set by the peak
+    through date ``j - 1``; ``F[0]`` is the date-0 floor itself
+    (the fixed floor in fixed mode, ``(1 - max_dd) * V0`` in
+    drawdown mode). The terminal comparison uses ``F[steps]``, the
+    floor at the last trade date: it agrees with the horizon floor
+    in every case, because a final move to a new peak leaves
+    post-liquidation wealth above 0.9 times that peak whenever the
+    fee is below 10% of wealth, and otherwise the peak is unchanged.
     """
     n, steps_p1, na = P.shape
     steps = steps_p1 - 1
@@ -202,6 +216,7 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         cushion = torch.clamp((V - floor_t) / V.clamp_min(1e-8), -1.0, 1.0)
         w = weight_fn(i, V, tau_frac, cushion, vols[:, i, :],
                       trail[:, i, :], floor_t)
+        validate_portfolio_weights(w)
         w_risky = w[:, :na]
         holdings = D if i == 0 else D * rets[:, i - 1, :]
         V = cash + holdings.sum(dim=1)
@@ -219,9 +234,10 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         # post-liquidation wealth, so W[:, -1] == V_T exactly.
         wealth_path[-1] = V.clone()
         W = torch.stack(wealth_path, dim=1)
-        F = torch.stack(
-            [torch.full_like(V, floor)] + floor_vals, dim=1
-        )
+        # F[0] is the date-0 floor itself (floor_vals[0]), not the
+        # fixed-floor parameter: in drawdown mode those differ
+        # whenever floor != (1 - max_dd) * V0.
+        F = torch.stack([floor_vals[0]] + floor_vals, dim=1)
         return V, W, F
     return V
 

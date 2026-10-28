@@ -178,8 +178,11 @@ def test_path_terminal_matches_V_T():
 
 
 def test_liquidation_breach_counts_as_anytime_breach():
-    # One step, fully invested: wealth 90.65 just above the 90 floor
-    # before liquidation, 88.69 after the 2% liquidation cost. The
+    # One step, fully invested: wealth 90.6863 just above the 90 floor
+    # before liquidation, 88.8725 after the 2% liquidation cost. The
+    # pre-NC3 values were 90.65 and 88.69: the old code charged the
+    # entry fee on the pre-fee target and liquidated on the stale
+    # pre-move holding (see the E1 legacy table). The
     # anytime breach must fire on the post-liquidation close.
     S = torch.as_tensor([[100.0, 92.5]], dtype=torch.float32)
     V_T, path = rollout(S, _const_weight(1.0), cost_rate=0.02,

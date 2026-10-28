@@ -123,3 +123,27 @@ def rebalance_multi(wealth, holdings, weights, cost_rate):
     fee = cost_rate * (holdings_post - holdings).abs().sum(dim=-1)
     cash_post = (1.0 - weights.sum(dim=-1)) * wealth_post
     return holdings_post, cash_post, fee, wealth_post
+
+
+def validate_portfolio_weights(weights, tol=1e-5):
+    """Fail-closed check for a long-only portfolio weight matrix.
+
+    ``weights`` has shape ``(..., n_assets + 1)`` with the last
+    column cash: every entry must be nonnegative (within ``tol``)
+    and each row must sum to one (within ``tol``). Raises ValueError
+    naming the violation. This is what makes a long-only rollout's
+    no-borrowing claim enforced rather than assumed: without it, a
+    negative weight silently shorted and a risky sum above one
+    silently borrowed at the cash rate.
+    """
+    w = weights if torch.is_tensor(weights) \
+        else torch.as_tensor(weights, dtype=torch.float32)
+    if bool((w < -tol).any()):
+        raise ValueError(
+            "portfolio weights must be nonnegative, got min "
+            f"{float(w.min()):.6g}")
+    dev = (w.sum(dim=-1) - 1.0).abs()
+    if bool((dev > tol).any()):
+        raise ValueError(
+            "portfolio weights must sum to one, got max deviation "
+            f"{float(dev.max()):.6g}")

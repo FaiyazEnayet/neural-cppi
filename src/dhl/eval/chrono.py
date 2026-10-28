@@ -20,6 +20,8 @@ import math
 import numpy as np
 import torch
 
+from dhl.eval.statistics import aggregate_by_family
+
 
 def split_returns_by_date(dates, returns, train_end, val_end,
                           val_start=None):
@@ -124,7 +126,7 @@ def max_drawdown(wealth_paths):
 
 
 def paired_evaluate(strategies, S_np, rollout_fn, floor,
-                    reference=None):
+                    reference=None, window_keys=None, event_families=None):
     """Evaluate every strategy on the IDENTICAL price paths ``S_np``.
 
     ``strategies``: dict mapping name -> weight_fn, as accepted by
@@ -138,6 +140,15 @@ def paired_evaluate(strategies, S_np, rollout_fn, floor,
     names one of the strategies -- the mean and std of the per-path
     terminal-wealth difference versus that reference (the paired
     comparison: same paths, so the gap is the policy, not the draw).
+
+    P1-C enrichment: when ``window_keys`` and ``event_families`` are
+    both supplied (aligned with the paths, one entry per path), each
+    non-reference strategy additionally gains
+    ``paired_differences_per_window`` (the per-window gaps in key
+    order, via ``dhl.eval.statistics``) and ``family_aggregation``
+    (the family-equal mean, so one event cannot vote once per
+    horizon). Supplying only one of the two, or a length mismatch,
+    raises. With neither supplied the output is exactly as before.
     """
     S = torch.as_tensor(np.asarray(S_np), dtype=torch.float32)
     names = list(strategies)
@@ -151,6 +162,17 @@ def paired_evaluate(strategies, S_np, rollout_fn, floor,
     if reference is not None and reference not in strategies:
         raise ValueError(f"reference {reference!r} not in strategies")
     ref_V = V_T_all[reference] if reference else None
+
+    if (window_keys is None) != (event_families is None):
+        raise ValueError(
+            "window_keys and event_families must be given together")
+    if window_keys is not None:
+        n_paths = len(next(iter(V_T_all.values())))
+        if len(window_keys) != n_paths or len(event_families) != n_paths:
+            raise ValueError(
+                f"window keys/families must align with {n_paths} paths")
+        if len(set(window_keys)) != len(window_keys):
+            raise ValueError("duplicate window key in window_keys")
 
     results = {}
     for name in names:
@@ -174,6 +196,15 @@ def paired_evaluate(strategies, S_np, rollout_fn, floor,
                 "std": float(gap.std()),
                 "frac_paths_better": float((gap > 0).mean()),
             }
+            if window_keys is not None:
+                rows = [{"window": k,
+                         "a": float(V_T[i]),
+                         "b": float(ref_V[i]),
+                         "diff": float(gap[i])}
+                        for i, k in enumerate(window_keys)]
+                m["paired_differences_per_window"] = rows
+                m["family_aggregation"] = aggregate_by_family(
+                    [float(g) for g in gap], list(event_families))
         results[name] = m
     return results
 

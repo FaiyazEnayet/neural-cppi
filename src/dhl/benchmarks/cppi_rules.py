@@ -172,6 +172,59 @@ def trend_vol_weight_fn(multiplier=4.0, floor=FLOOR, cap=CAP):
     return fn
 
 
+def threshold_hysteresis_weight_fn(multiplier=4.0, floor=FLOOR, cap=CAP,
+                                   signal="vol",
+                                   high_threshold=0.35, low_threshold=0.20,
+                                   high_fraction=1.0, low_fraction=0.25):
+    """Threshold/hysteresis utilization of the classic CPPI budget.
+
+    The rule holds ``high_fraction`` of the classic budget while the
+    causal ``signal`` feature (default the 21d realized vol) is calm.
+    When the signal crosses ``high_threshold`` the utilization drops
+    to ``low_fraction``; it returns to ``high_fraction`` only when the
+    signal falls below ``low_threshold``. Between the two thresholds
+    the previous state holds, so a signal hovering near one threshold
+    does not chatter the allocation every step. Each path keeps its
+    own state, and a fresh rollout (step ``i == 0``) restarts in the
+    high state; the weight function is only ever called in step order
+    by ``rollout``. A missing signal feature raises instead of
+    degrading silently, because a hysteresis rule with no signal is
+    not a rule at all. Thresholds must satisfy
+    ``low_threshold < high_threshold`` and both fractions must lie in
+    [0, 1].
+    """
+    if not low_threshold < high_threshold:
+        raise ValueError(
+            f"low_threshold ({low_threshold}) must be below "
+            f"high_threshold ({high_threshold})")
+    for name, frac in (("high_fraction", high_fraction),
+                       ("low_fraction", low_fraction)):
+        if not 0.0 <= frac <= 1.0:
+            raise ValueError(
+                f"{name} must lie in [0, 1], got {frac}")
+    state = {"u": None}
+
+    def fn(i, V, tau_frac, cushion, feats):
+        if signal not in feats:
+            raise ValueError(
+                f"hysteresis signal {signal!r} not in features")
+        sig = feats[signal]
+        u = state["u"]
+        if i == 0 or u is None or u.shape != V.shape:
+            u = torch.full_like(V, high_fraction)
+        u = torch.where(
+            sig > high_threshold,
+            torch.full_like(V, low_fraction),
+            torch.where(sig < low_threshold,
+                        torch.full_like(V, high_fraction), u))
+        state["u"] = u
+        w = classic_cppi_weight(V, floor=floor, multiplier=multiplier,
+                                cap=cap)
+        return torch.clamp(u * w, max=cap)
+
+    return fn
+
+
 def learned_weight_fns(policy, multiplier=4.0, floor=FLOOR, cap=CAP,
                        emergency_vol=SHIPPED_EMERGENCY_VOL,
                        emergency_multiplier=SHIPPED_EMERGENCY_MULTIPLIER):

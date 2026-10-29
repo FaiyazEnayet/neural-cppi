@@ -134,7 +134,7 @@ def budget_from_forecast(forecast_loss, reference_loss, base_budget=1.0,
 
     Higher forecast downside scales the budget down proportionally:
     ``base_budget * reference_loss / forecast_loss``, clipped to
-    ``[floor, cap]``. A nonpositive forecast holds the cap (no
+    ``[floor, cap]``. A zero forecast holds the cap (no
     downside, no reason to cut). This is budget-setting only: the
     forecast is not traded as its own signal, and the scaled budget
     carries no performance claim.

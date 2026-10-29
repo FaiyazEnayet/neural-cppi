@@ -44,6 +44,7 @@ LADDER_KINDS = (
     "budget_fraction",
     "fixed_cap",
     "trend_vol",
+    "threshold_hysteresis",
     "learned",
     "learned_constrained",
     "learned_constrained_brake",
@@ -144,6 +145,14 @@ def make_weight_fn(config, conventions, policy=None):
             weight=float(p.get("weight", 0.5)), cap=cap)
     if kind == "trend_vol":
         return rules.trend_vol_weight_fn(multiplier=m, floor=floor, cap=cap)
+    if kind == "threshold_hysteresis":
+        return rules.threshold_hysteresis_weight_fn(
+            multiplier=m, floor=floor, cap=cap,
+            signal=str(p.get("signal", "vol")),
+            high_threshold=float(p.get("high_threshold", 0.35)),
+            low_threshold=float(p.get("low_threshold", 0.20)),
+            high_fraction=float(p.get("high_fraction", 1.0)),
+            low_fraction=float(p.get("low_fraction", 0.25)))
     if kind in ("learned", "learned_constrained", "learned_constrained_brake"):
         if policy is None:
             raise ValueError(

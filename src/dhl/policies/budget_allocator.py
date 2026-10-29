@@ -1,4 +1,4 @@
-"""Budget-utilization policy: the source contract (R1, Part 1).
+"""Budget-utilization policy: the source contract (R1).
 
 The current learned allocator requests an absolute risky weight and a
 protective layer may then discard part of the request, which both
@@ -29,6 +29,14 @@ form ``u = sigmoid(h)``, logits clamped against saturation, and a
 zero final layer so the initial fraction is state-independent and
 close to CPPI without a saturated derivative.
 
+Part 2 scope: the declared scenario protocol, the deterministic
+trainer for the fraction network, validation-based selection of the
+de-risking penalty, and the general controller evaluator at the end
+of this module (``train_budget_fraction_net``,
+``select_derisk_penalty``, ``evaluate_fraction_controllers``,
+``budget_experiment_scenarios``), with the experiment runs in
+scripts/experiments/budget_utilization.py.
+
 Execution goes through the existing single-asset ``rollout`` in
 ``dhl.experiments.cppi_learned``, which accounts every trade with the
 shared kernel in ``dhl.backtest.execution`` (the proposed
@@ -41,6 +49,7 @@ independent check, not the same formula twice.
 
 import math
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -50,11 +59,13 @@ from dhl.experiments.cppi_learned import (
     DT,
     FEATURE_NAMES,
     FLOOR,
+    FLOOR_PENALTY,
     R,
     V0,
     classic_cppi_weight,
     rollout,
 )
+from dhl.markets.gbm import simulate_gbm
 
 LOGIT_CLIP = 6.0
 FRACTION_TOL = 1e-12
@@ -162,7 +173,7 @@ def cushion_ramp_fraction(full_at=0.10):
     return fn
 
 
-# --- the bounded fraction network (contract definition, untrained) ---------
+# --- the bounded fraction network (contract definition) ---------------------
 
 
 class BudgetFractionNet(nn.Module):
@@ -531,4 +542,354 @@ def baseline_report(scenarios, multiplier=4.0, floor=FLOOR, cap=CAP,
         "parity": parity,
         "oracle": {"max_terminal_diff": max(oracle_diffs)},
         "self_financing_violations": violations,
+    }
+
+
+# --- scenario protocol (Part 2) ----------------------------------------------
+#
+# Declared scenario families for the utilization experiments.  Every
+# family is GBM (dhl.markets.gbm.simulate_gbm), 20 scenarios of
+# 16 paths x 63 steps unless a caller overrides the shape, evaluated
+# at multiplier 4, floor 90, cap 1.5, 20bp costs.  The five seed sets
+# are pairwise disjoint: the baseline reproduces the Part 1 capture
+# for comparability, training and validation carry the
+# penalty-selection protocol, and the stress and gap families are
+# held out from both training and selection.
+#
+# Training and validation mix three regimes by position in the seed
+# list (position modulo 3): calm, stress, gap.  The gap regime is a
+# calm GBM path with one multiplicative jump of GAP_JUMP per path at
+# a seeded step.  Rationale: under daily rebalancing a GBM-only
+# stress family (sigma 0.55, drift -0.25) produces zero shortfall
+# and zero breaches for every controller, classic CPPI included,
+# because the cushion-proportional rule de-risks smoothly as wealth
+# falls, and a breach needs a one-step drop larger than 1 / m (25%
+# at m = 4).  The jump step is seeded per path and is not knowable
+# from the ex-ante state, so the gap family measures the exposure
+# tradeoff rather than forecasting skill.
+
+CALM_SIGMA = 0.30
+STRESS_SIGMA = 0.55
+STRESS_DRIFT = -0.25
+GAP_JUMP = -0.30
+
+SEED_SETS = {
+    "baseline": tuple(1000 + k for k in range(20)),
+    "training": tuple(2000 + k for k in range(20)),
+    "validation": tuple(3000 + k for k in range(20)),
+    "stress": tuple(4000 + k for k in range(20)),
+    "gap": tuple(5000 + k for k in range(20)),
+}
+
+
+def make_gbm_scenarios(seeds, n_paths=16, n_steps=63, sigma=CALM_SIGMA,
+                       drift=R, dtype=torch.float64):
+    """Seeded GBM scenarios as (seed, price tensor) pairs."""
+    scenarios = []
+    for seed in seeds:
+        S = simulate_gbm(n_paths, n_steps, n_steps * DT, 100.0, drift,
+                         sigma, seed=int(seed))
+        scenarios.append((int(seed), torch.tensor(S, dtype=dtype)))
+    return scenarios
+
+
+def gap_augment(S, jump=GAP_JUMP, seed=0):
+    """Copy of price tensor S with one multiplicative jump per path.
+
+    Each path p gets one jump step j_p drawn uniformly from the
+    middle two thirds of the path by a generator seeded with
+    ``seed``; prices from j_p + 1 onward are scaled by ``1 + jump``,
+    so the one-step return into j_p + 1 carries the jump.
+    Deterministic in ``seed``.
+    """
+    if not -1.0 < jump < 0.0:
+        raise ValueError(f"jump must lie in (-1, 0), got {jump}")
+    out = S.clone()
+    n_paths, n_prices = out.shape
+    steps = n_prices - 1
+    lo = max(1, steps // 6)
+    hi = max(lo, (5 * steps) // 6)
+    rng = np.random.default_rng(int(seed))
+    for p in range(n_paths):
+        j = int(rng.integers(lo, hi + 1))
+        out[p, j + 1:] *= (1.0 + jump)
+    return out
+
+
+def _regime_scenario(seed, regime, n_paths, n_steps, dtype):
+    if regime == 1:
+        return make_gbm_scenarios([seed], n_paths, n_steps,
+                                  sigma=STRESS_SIGMA,
+                                  drift=STRESS_DRIFT, dtype=dtype)
+    calm = make_gbm_scenarios([seed], n_paths, n_steps,
+                              sigma=CALM_SIGMA, drift=R, dtype=dtype)
+    if regime == 2:
+        return [(seed, gap_augment(calm[0][1], seed=seed))]
+    return calm
+
+
+def budget_experiment_scenarios(name, n_paths=16, n_steps=63,
+                                dtype=torch.float64):
+    """One declared scenario family by name (see ``SEED_SETS``)."""
+    if name not in SEED_SETS:
+        raise ValueError(f"unknown scenario set {name!r}; expected "
+                         f"one of {sorted(SEED_SETS)}")
+    seeds = SEED_SETS[name]
+    if name == "baseline":
+        return make_gbm_scenarios(seeds, n_paths, n_steps,
+                                  sigma=CALM_SIGMA, drift=R,
+                                  dtype=dtype)
+    if name == "stress":
+        return make_gbm_scenarios(seeds, n_paths, n_steps,
+                                  sigma=STRESS_SIGMA,
+                                  drift=STRESS_DRIFT, dtype=dtype)
+    if name == "gap":
+        return [(seed, gap_augment(S, seed=seed))
+                for seed, S in make_gbm_scenarios(
+                    seeds, n_paths, n_steps, sigma=CALM_SIGMA,
+                    drift=R, dtype=dtype)]
+    scenarios = []
+    for pos, seed in enumerate(seeds):
+        scenarios += _regime_scenario(seed, pos % 3, n_paths,
+                                      n_steps, dtype)
+    return scenarios
+
+
+# --- general controller evaluation (Part 2) -----------------------------------
+
+
+def evaluate_fraction_controllers(scenarios, controllers,
+                                  multiplier=4.0, floor=FLOOR,
+                                  cap=CAP, cost_rate=COST_RATE):
+    """Evaluate arbitrary fraction controllers on seeded scenarios.
+
+    The metric family of ``baseline_report`` (mean terminal wealth,
+    return, shortfall, terminal and anytime breach counts, fees,
+    fraction range) plus the mean fraction, the utilization measure
+    of this item.  Runs under no_grad and audits every ledger with
+    ``ledger_self_financing_violations``; the total violation count
+    is returned alongside the rows.  ``controllers`` maps names to
+    fraction functions.
+    """
+    agg = {}
+    violations = 0
+    with torch.no_grad():
+        for name, fn in controllers.items():
+            a = agg[name] = {
+                "wealth": [], "shortfall": [], "fees": [],
+                "breach_terminal": 0, "breach_anytime": 0,
+                "frac_sum": 0.0, "frac_count": 0,
+                "fraction_min": float("inf"),
+                "fraction_max": float("-inf"),
+            }
+
+            def recording(i, V, tau_frac, cushion, feats, _fn=fn,
+                          _a=a):
+                u = _fn(i, V, tau_frac, cushion, feats)
+                _a["frac_sum"] += float(u.sum())
+                _a["frac_count"] += int(u.numel())
+                _a["fraction_min"] = min(_a["fraction_min"],
+                                         float(u.min()))
+                _a["fraction_max"] = max(_a["fraction_max"],
+                                         float(u.max()))
+                return u
+
+            for _, S in scenarios:
+                V_T, path, ledger = rollout(
+                    S, budget_weight_fn(recording,
+                                        multiplier=multiplier,
+                                        floor=floor, cap=cap),
+                    floor=floor, cost_rate=cost_rate, cap=cap,
+                    return_path=True, return_ledger=True)
+                a["wealth"].append(V_T)
+                a["shortfall"].append(
+                    torch.clamp(floor - V_T, min=0.0))
+                a["fees"].append(ledger["cum_fees"])
+                a["breach_terminal"] += int((V_T < floor).sum())
+                a["breach_anytime"] += int(
+                    (path.min(dim=1).values < floor).sum())
+                violations += ledger_self_financing_violations(ledger)
+
+    rows = []
+    for name in controllers:
+        a = agg[name]
+        wealth = torch.cat(a["wealth"])
+        shortfall = torch.cat(a["shortfall"])
+        fees = torch.cat(a["fees"])
+        rows.append({
+            "controller": name,
+            "mean_terminal_wealth": float(wealth.mean()),
+            "mean_return": float(wealth.mean()) / V0 - 1.0,
+            "mean_shortfall": float(shortfall.mean()),
+            "breach_count_terminal": a["breach_terminal"],
+            "breach_count_anytime": a["breach_anytime"],
+            "mean_fees": float(fees.mean()),
+            "mean_fraction": a["frac_sum"] / a["frac_count"],
+            "fraction_min": a["fraction_min"],
+            "fraction_max": a["fraction_max"],
+            "n_paths": int(wealth.shape[0]),
+        })
+    return {
+        "n_scenarios": len(scenarios),
+        "seeds": [int(seed) for seed, _ in scenarios],
+        "multiplier": multiplier,
+        "floor": floor,
+        "cap": cap,
+        "cost_rate": cost_rate,
+        "controllers": rows,
+        "self_financing_violations": violations,
+    }
+
+
+# --- training (Part 2) ---------------------------------------------------------
+
+
+def train_budget_fraction_net(net, scenarios, n_epochs=100, lr=3e-3,
+                              floor_penalty=FLOOR_PENALTY,
+                              derisk_penalty=0.0, multiplier=4.0,
+                              floor=FLOOR, cap=CAP,
+                              cost_rate=COST_RATE,
+                              multiplier_fn=None, seed=0):
+    """Train a ``BudgetFractionNet`` through the shared rollout.
+
+    Full-batch Adam over the concatenation of ``scenarios`` (all
+    scenarios must share a step count; their combined path population
+    is the training batch).  The minimized objective is
+
+        loss = -E[V_T] + floor_penalty * E[relu(floor - V_T)]
+               + derisk_penalty * E[1 - u],
+
+    where E[1 - u] averages the unused budget fraction over every
+    step and path of the batch.  The first two terms are the repo
+    objective family (``train_cppi_policy`` with FLOOR_PENALTY); the
+    third is the optional de-risking penalty, zero unless selected by
+    ``select_derisk_penalty``.  ``multiplier_fn`` threads emergency
+    tightening through ``budget_weight_fn`` exactly as at evaluation
+    time, so a tightened budget is inside the training rollout, never
+    silently ignored by it.  Gradients are clipped at norm 1.0, the
+    repo training convention.  ``torch.manual_seed(seed)`` is set on
+    entry, so a fixed seed and fixed initial parameters reproduce the
+    run exactly.
+
+    Returns the per-epoch history: entry 0 is the pre-update
+    evaluation of the initial network and entry k the evaluation
+    after k optimizer steps.  Each entry records the loss
+    decomposition (loss, mean_wealth, mean_shortfall, mean_derisk,
+    mean_fraction), so the penalty's contribution is exactly
+    recoverable as derisk_penalty * mean_derisk.
+    """
+    if not scenarios:
+        raise ValueError("training needs at least one scenario")
+    if len({S.shape[1] for _, S in scenarios}) != 1:
+        raise ValueError("training scenarios must share a step count")
+    if n_epochs < 0:
+        raise ValueError("n_epochs must be non-negative")
+    if lr <= 0.0:
+        raise ValueError("lr must be positive")
+    if floor_penalty < 0.0 or derisk_penalty < 0.0:
+        raise ValueError("penalties must be non-negative")
+    torch.manual_seed(seed)
+    S_all = torch.cat([S for _, S in scenarios], dim=0)
+    base_fn = net_fraction_fn(net)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+
+    def evaluate():
+        sums, counts = [], []
+
+        def tracked(i, V, tau_frac, cushion, feats):
+            u = base_fn(i, V, tau_frac, cushion, feats)
+            sums.append(u.sum())
+            counts.append(int(u.numel()))
+            return u
+
+        V_T = rollout(S_all, budget_weight_fn(
+            tracked, multiplier=multiplier, floor=floor, cap=cap,
+            multiplier_fn=multiplier_fn),
+            floor=floor, cost_rate=cost_rate, cap=cap)
+        mean_derisk = 1.0 - sum(sums) / float(sum(counts))
+        mean_shortfall = torch.clamp(floor - V_T, min=0.0).mean()
+        loss = (-V_T.mean() + floor_penalty * mean_shortfall
+                + derisk_penalty * mean_derisk)
+        metrics = {
+            "loss": float(loss.detach()),
+            "mean_wealth": float(V_T.detach().mean()),
+            "mean_shortfall": float(mean_shortfall.detach()),
+            "mean_derisk": float(mean_derisk.detach()),
+            "mean_fraction": 1.0 - float(mean_derisk.detach()),
+        }
+        return loss, metrics
+
+    history = []
+    loss, metrics = evaluate()
+    history.append({"epoch": 0, **metrics})
+    for epoch in range(1, n_epochs + 1):
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+        optimizer.step()
+        loss, metrics = evaluate()
+        history.append({"epoch": epoch, **metrics})
+    return history
+
+
+def select_derisk_penalty(candidates, train_scenarios,
+                          validation_scenarios, form="residual",
+                          n_epochs=100, lr=3e-3,
+                          floor_penalty=FLOOR_PENALTY, multiplier=4.0,
+                          floor=FLOOR, cap=CAP, cost_rate=COST_RATE,
+                          seed=0, net_kwargs=None):
+    """Select the de-risking penalty on validation scenarios.
+
+    Each candidate penalty trains a fresh ``BudgetFractionNet`` from
+    the same seeded initialization on ``train_scenarios``; the
+    trained network is then scored on ``validation_scenarios`` by
+    the validation objective E[V_T] - floor_penalty * E[shortfall]:
+    the repo objective family without the de-risking term, which is a
+    training prior, not part of the score.  The highest objective
+    wins; ties break toward the smaller penalty, since candidates
+    are visited in ascending order and only a strict improvement
+    replaces the incumbent.  The evaluation families (baseline,
+    stress, gap) play no role in selection.
+
+    Returns a dict with the selected penalty and one table row per
+    candidate carrying its validation metrics.
+    """
+    candidates = sorted(float(c) for c in candidates)
+    if not candidates:
+        raise ValueError("at least one candidate penalty is required")
+    if any(c < 0.0 for c in candidates):
+        raise ValueError("candidate penalties must be non-negative")
+    table = []
+    best = None
+    for lam in candidates:
+        torch.manual_seed(seed)
+        net = BudgetFractionNet(form=form, **(net_kwargs or {}))
+        history = train_budget_fraction_net(
+            net, train_scenarios, n_epochs=n_epochs, lr=lr,
+            floor_penalty=floor_penalty, derisk_penalty=lam,
+            multiplier=multiplier, floor=floor, cap=cap,
+            cost_rate=cost_rate, seed=seed)
+        report = evaluate_fraction_controllers(
+            validation_scenarios,
+            {"learned": net_fraction_fn(net)},
+            multiplier=multiplier, floor=floor, cap=cap,
+            cost_rate=cost_rate)
+        row = dict(report["controllers"][0])
+        row.pop("controller")
+        objective = (row["mean_terminal_wealth"]
+                     - floor_penalty * row["mean_shortfall"])
+        table.append({
+            "derisk_penalty": lam,
+            "validation_objective": objective,
+            "final_train_loss": history[-1]["loss"],
+            "final_train_mean_fraction": history[-1]["mean_fraction"],
+            **row,
+        })
+        if best is None or objective > best[1]:
+            best = (lam, objective)
+    return {
+        "selected_derisk_penalty": best[0],
+        "form": form,
+        "floor_penalty": floor_penalty,
+        "table": table,
     }

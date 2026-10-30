@@ -9,7 +9,7 @@ that guards a wealth floor under transaction costs. No options, no
 derivatives of any kind. Just a portfolio, a floor, and scenarios.
 """
 
-__version__ = "0.2.0"
+__version__ = "1.3.0"
 
 from dhl.markets import (
     block_bootstrap_paths,

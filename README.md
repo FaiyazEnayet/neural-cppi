@@ -102,7 +102,7 @@ The windows overlap by construction: paired horizons share start dates. The **38
 
 Four candidate improvements, multi-horizon training, an anytime shortfall penalty, a rebound feature and a recovery spending rule, were tuned only within the separate validation and layer-tuning tiers, frozen, and judged once against sealed windows under a pre-registered adoption rule. None met the rule; the shipped system is unchanged. One early evaluation of the penalty candidate used a mis-signed objective term. It was rerun with the sign corrected under identical budgets, data and seeds, and the rejection stood.
 
-The complete study is retained as a private report. Its record is fixed by SHA-256 `760c45fde1f557b4b257fb39f85761e1af6f81cfa0c04d92a99df3dcc6ca303a`. This section publishes summary results and aggregate charts only.
+The complete study is retained as a private report. Its record is fixed by SHA-256 `760c45fde1f557b4b257fb39f85761e1af6f81cfa0c04d92a99df3dcc6ca303a`. This section just showed the summary results and aggregate charts only.
 
 
 ## Code and data

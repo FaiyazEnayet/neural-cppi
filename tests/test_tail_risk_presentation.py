@@ -33,7 +33,9 @@ def test_publication_charts_are_embedded_without_external_dependencies():
   assert struct.unpack('>I',content[16:20])[0]==1200
   assert base64.b64decode(e['tail_risk_images'][key].split(',',1)[1])==content
  assert not re.search(r'<script[^>]+src=',raw,re.I)
- assert 'historicalTailRisk();metric(D.metrics)' in raw
+ assert 'riskReadout(wealthResult,wf);historicalTailRisk(g);' in raw
+ assert 'function neural(){historicalTailRisk();' not in raw
+ assert raw.index('href="#wealth"') < raw.index('href="#tail-risk"')
 
 def test_readme_section_is_complete_and_uses_published_paths():
  section=(ROOT/'historical-tail-risk-section.md').read_text(encoding='utf8')

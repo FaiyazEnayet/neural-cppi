@@ -38,8 +38,26 @@ def extract(raw,repo):
   d['formula_data'].pop('cse214',None);d['formula_order']=[k for k in d['formula_order'] if k!='cse214']
  return d,soup
 def jsonfile(root,p):return json.loads((root/p).read_text(encoding='utf8'))
+
+def attach_tail_risk(d,root):
+ summary=root/'docs/tail-risk-summary.json'
+ if d['repo']=='neural-cppi' and summary.exists():
+  d['tail_risk']=json.loads(summary.read_text(encoding='utf8'))
+  d['tail_risk_images']={k:'data:image/png;base64,'+base64.b64encode((root/('docs/tail-risk-'+k+'.png')).read_bytes()).decode('ascii') for k in ['breaches','terminal']}
+  if d.get('design'):
+   d['design']=copy.deepcopy(d['design'])
+   d['design']['sources']=[p for p in d['design']['sources'] if p!='docs/historical-tail-risk.md']
+   d.setdefault('provenance',{}).setdefault('files',{}).pop('docs/historical-tail-risk.md',None)
+   d['design']['classification']='Historical stress aggregate, historical-return bootstrap and separate synthetic experiments'
+   for path in ['docs/tail-risk-summary.json','historical-tail-risk-section.md']:
+    if path not in d['design']['sources']:d['design']['sources'].append(path)
+    d.setdefault('provenance',{}).setdefault('files',{})[path]=hashlib.sha256((root/path).read_bytes()).hexdigest()
+   d['provenance']['classification']=d['design']['classification']
+ return d
 def enrich(d,soup,root):
  repo=d['repo'];c=CONFIGS[repo];d['design']=c;d['metrics']=[]
+ attach_tail_risk(d,root)
+ c=d['design']
  if repo=='neural-cppi':
   # The committed HTML and the original generator use different table treatments.
   for f in d['figures'][4:]:
@@ -115,6 +133,10 @@ def enrich(d,soup,root):
  d['provenance']=dict(files={p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in c['sources'] if (root/p).is_file()},classification=c['classification'])
  return d
 def page_parts(d):
+ if d.get('tail_risk'):
+  # Both original generation and presentation refresh use this module.
+  tail_js=(HERE/'tail-risk.js').read_text(encoding='utf8')
+ else:tail_js=''
  c=d['design'];cols=c['colors'];tokens=';'.join('--'+k+':'+v for k,v in zip(['bg','surface','text','muted','accent','line'],cols));tokens+=';--radius:3px;--display:"'+c['display']+'";--body:"'+c['body']+'";--mono:"'+c['mono']+'"'
  fonts=json.loads((HERE/'fonts.json').read_text(encoding='utf8'));font='\n'.join(fonts.get(f,'') for f in dict.fromkeys([c['display'],c['body'],c['mono']]));css=(HERE/'base.css').read_text(encoding='utf8');js=(HERE/'runtime.js').read_text(encoding='utf8')
  source='https://github.com/FaiyazEnayet/'+d['repo'];limits=''.join('<li>'+html.escape(x)+'</li>' for x in c['limits']);files=''.join('<li><code>'+html.escape(p)+'</code></li>' for p in c['sources'])
@@ -122,6 +144,9 @@ def page_parts(d):
  nav=''.join(f'<a href="#{a}">{t}</a>' for t,a in refs[d['repo']])+'<a href="#sources">Sources & limits</a>'
  head=f'''<!doctype html><html lang="en" style='{tokens};color-scheme:{'light' if cols[0][1:3] in ['ee','f1','f2','f3','f4'] else 'dark'}'><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="{cols[0]}"><title>{html.escape(c['name'])} | {d['repo']}</title><style>{font}</style><style>{css}</style></head><body data-repo="{d['repo']}"><a class="skip" href="#content">Skip to dashboard</a><div class="shell"><header class="masthead"><div class="identity"><svg class="seal" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9v14l-13 7L3 23V9ZM16 8v16M8 12l16 8M24 12 8 20" fill="none" stroke="currentColor" stroke-width="1"/></svg><b>{html.escape(d['repo'])}</b> / RESEARCH PORTFOLIO</div><div class="edition">FAIYAZ ENAYET<br>LOCAL EDITION · 2026</div></header><div class="hero"><div><div class="eyebrow">{html.escape(c['brief'])}</div><h1>{html.escape(c['name'])}</h1><p class="question">{html.escape(c['question'])}</p></div><div class="brief"><b>Evidence, with its boundaries.</b>{html.escape(c['classification'])}<br><span class="badge">SELF-CONTAINED SNAPSHOT</span></div></div><nav class="nav" aria-label="Dashboard sections">{nav}</nav><main id="content"></main><div id="status" class="status" role="status" aria-live="polite">Preparing local charts…</div><section class="source" id="sources"><h2>Evidence & limitations</h2><p>{html.escape(c['classification'])}. This page preserves the repository’s recorded results; it does not fetch live data or rerun research models.</p><ul>{limits}</ul><details><summary>Inspect data lineage and assumptions</summary><p>Source: <a href="{source}">FaiyazEnayet/{d['repo']}</a>. Recorded chart arrays are extracted from the committed dashboard. Additional views use the explicit source calculations documented in DESIGN-AND-VALIDATION.md. Research code and evaluation methods are preserved.</p><ul>{files}</ul><p>Source-file SHA-256 checksums are embedded in this file’s evidence payload. The accompanying validation report distinguishes automated checks from visual review.</p></details></section><footer class="footer"><span>{html.escape(c['name'])} · Faiyaz Enayet</span><span>Designed for inspection. Built from source evidence.</span></footer></div>'''
  head=re.sub(r'<header class="masthead">.*?<main id="content"></main>',opening(d,nav)+'<main id="content"></main>',head,flags=re.S)
+ if tail_js:
+  js=tail_js+'\n'+js.replace('function neural(){metric(D.metrics)','function neural(){historicalTailRisk();metric(D.metrics)',1)
+  head=head.replace('<a href="#wealth">Wealth &amp; floor</a>','<a href="#tail-risk">Historical stress</a><a href="#wealth">Wealth &amp; floor</a>') if 'Wealth &amp; floor' in head else head.replace('<a href="#wealth">Wealth & floor</a>','<a href="#tail-risk">Historical stress</a><a href="#wealth">Wealth & floor</a>')
  return head,js
 def render_html(root,repo,raw):
  d,soup=extract(raw,repo);d=enrich(d,soup,Path(root));head,js=page_parts(d)

@@ -1,7 +1,7 @@
 /* Aggregate historical study evidence; no per-window date/result mapping. */
-function historicalTailRisk(){
+function historicalTailRisk(parent=root){
  const d=D.tail_risk;if(!d)return;
- const p=panel('Historical tail-risk challenge','Pre-registered historical stress evaluation · frozen shipped policy and deterministic safety layer versus classic CPPI.','full tail-risk-study','tail-risk');root.append(p);
+ const p=panel('Historical tail-risk challenge','Pre-registered historical stress evaluation · frozen shipped policy and deterministic safety layer versus classic CPPI.','full tail-risk-study','tail-risk');parent.append(p);
  const intro=el('div','tail-risk-intro');
  intro.append(el('p','',`Both complete systems recorded zero anytime floor breaches across ${d.windows} windows. The shipped system’s worst observed minimum wealth was ${d.worst_minimum}.`));
  intro.append(el('p','',`The shipped system finished ahead on terminal wealth in ${d.terminal_wins} of ${d.main_windows} US windows. The median paired advantage was ${d.median_advantage} wealth units; the mean was ${d.mean_advantage}. Half of the wins were by +0.25 or less.`));p.append(intro);
@@ -24,5 +24,4 @@ function historicalTailRisk(){
  methods.append(el('p','','Windows overlap by construction because paired horizons share start dates. These 38 windows are not 38 independent trials. Zero observed breaches do not establish universal floor protection.'));
  methods.append(el('p','','Four candidate improvements were tuned only within the separate validation and layer-tuning tiers, frozen, and judged once on sealed windows under a pre-registered adoption rule: multi-horizon training, an anytime shortfall penalty, a rebound feature and a recovery spending rule. None met the rule; the shipped system is unchanged. An early penalty evaluation had a mis-signed objective term. Its corrected rerun used identical budgets, data and seeds, and the rejection stood.'));
  methods.append(el('p','','Summary results and aggregate charts only. Complete study retained as a private report. SHA-256: '+d.report_sha256));p.append(methods);
- root.append(el('h2','legacy-evidence-heading','Separate synthetic and bootstrap experiments'));
 }

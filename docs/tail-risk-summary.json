@@ -1,0 +1,18 @@
+{
+  "source": "User-supplied verified private archive summary",
+  "report_sha256": "760c45fde1f557b4b257fb39f85761e1af6f81cfa0c04d92a99df3dcc6ca303a",
+  "windows": 38,
+  "main_windows": 31,
+  "international_windows": 7,
+  "horizons": [252,504],
+  "tiers": {"sealed":25,"test":11,"held_out":7,"international":7,"tuning":13,"validation":9,"layer_tuning":4,"sealed_breaches":0,"sealed_worst_minimum":"90.33","sealed_main_wins":15,"sealed_main_windows":18,"international_wins":6},
+  "shipped_breaches": 0,
+  "classic_breaches": 0,
+  "worst_minimum": "90.33",
+  "terminal_wins": 28,
+  "median_advantage": "+0.19",
+  "mean_advantage": "+0.30",
+  "ablation": {"subset": "11 Great Depression windows", "windows": 11, "breaches": 8},
+  "recovery": {"shipped_terminal": "126.14", "classic_terminal": "153.38", "difference": "-27.24", "classic_mean_risky_weight": "0.500", "learned_mean_risky_weight": "0.151"},
+  "differences": [1.34,0.16,1.54,0.15,0.51,-0.12,0.15,-2.45,3.99,8.29,-27.24,0.15,1.8,0.1,0.07,0.02,1.3,0.72,0.06,0.02,0.19,0.14,0.25,0.14,1.42,2.01,2.68,5.76,5.73,0.15,0.28]
+}

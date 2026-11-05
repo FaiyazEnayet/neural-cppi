@@ -475,6 +475,88 @@ def cppi_constrained_weight_fn(learned_fn, multiplier=4.0, cap=CAP,
     return fn
 
 
+def vol_scaled_multiplier(vol, base_multiplier=4.0, ref_vol=0.20,
+                          min_multiplier=1.0, max_multiplier=6.0):
+    """Volatility-scaled CPPI multiplier: base * ref_vol / vol, clipped.
+
+    At the reference volatility the multiplier equals the base; at
+    twice the reference vol it halves; in calm markets it rises but
+    never above ``max_multiplier``, and in violent markets it never
+    falls below ``min_multiplier``. Works on floats or torch tensors.
+    A zero observed vol (no history yet) maps to ``max_multiplier``
+    rather than infinity.
+    """
+    if torch.is_tensor(vol):
+        m = base_multiplier * ref_vol / vol.clamp_min(1e-8)
+        return torch.clamp(m, min=min_multiplier, max=max_multiplier)
+    m = base_multiplier * ref_vol / max(float(vol), 1e-8)
+    return min(max(m, min_multiplier), max_multiplier)
+
+
+def gap_budget_multiplier(gap_drop=0.20, gap_loss_budget=0.50):
+    """Largest multiplier respecting a predeclared gap-loss budget.
+
+    If the risky asset gaps down by ``gap_drop`` between rebalances,
+    the one-step wealth loss is weight * gap_drop; under a CPPI
+    budget weight = m * cushion / V, that loss equals m * gap_drop
+    as a fraction of the cushion. Requiring the loss to stay within
+    ``gap_loss_budget`` of the cushion gives m <= budget / drop.
+    With a predeclared 20% gap and a 50% budget the cap is 2.5.
+    """
+    if gap_drop <= 0:
+        raise ValueError(f"gap_drop must be positive, got {gap_drop}")
+    if gap_loss_budget <= 0:
+        raise ValueError(
+            f"gap_loss_budget must be positive, got {gap_loss_budget}")
+    return gap_loss_budget / gap_drop
+
+
+def cppi_vol_budget_weight_fn(learned_fn, base_multiplier=4.0,
+                              ref_vol=0.20, min_multiplier=1.0,
+                              max_multiplier=6.0, gap_drop=0.20,
+                              gap_loss_budget=0.50,
+                              cap=CAP, floor=FLOOR):
+    """CPPI budget layer with a vol-scaled, gap-capped multiplier.
+
+    Same division of labor as ``cppi_constrained_weight_fn`` (the
+    network proposes, the budget disposes, scale-down only), but the
+    budget multiplier moves with the 21d realized vol feature and is
+    hard-capped by the predeclared gap-loss budget:
+    ``m_eff = min(vol_scaled_multiplier(vol), gap_budget_multiplier())``.
+
+    A single gap of ``gap_drop`` or smaller therefore cannot, by
+    itself, consume more than ``gap_loss_budget`` of the cushion
+    that existed when the weight was set. That is a statement about
+    one step from one state, not about whole paths: once the cushion
+    is gone no multiplier restores it, diffusive losses between gaps
+    are untouched by the budget, and a gap larger than ``gap_drop``
+    can still breach the floor.
+    """
+    m_gap = gap_budget_multiplier(gap_drop, gap_loss_budget)
+
+    def fn(i, V, tau_frac, cushion, feats):
+        w_proposed = learned_fn(i, V, tau_frac, cushion, feats)
+        m_vol = vol_scaled_multiplier(
+            feats["vol"], base_multiplier=base_multiplier,
+            ref_vol=ref_vol, min_multiplier=min_multiplier,
+            max_multiplier=max_multiplier)
+        if torch.is_tensor(m_vol):
+            m_eff = torch.clamp(m_vol, max=m_gap)
+        else:
+            m_eff = min(m_vol, m_gap)
+        cushion_amt = torch.clamp(V - floor, min=0.0)
+        budget = torch.clamp(
+            m_eff * cushion_amt / V.clamp_min(1e-8), max=cap)
+        # Scale down only; never scale up beyond what the network wants.
+        scale = torch.clamp(budget / w_proposed.clamp_min(1e-8), max=1.0)
+        # If the network proposes ~0, keep ~0 (avoid 0/0 artifacts).
+        scale = torch.where(w_proposed < 1e-8,
+                            torch.zeros_like(scale), scale)
+        return w_proposed * scale
+
+    return fn
+
+
 def _crash_weights(S, crash_mult=3.0, vol_cap=0.30):
     """Per-path breach-penalty multipliers, emphasizing crash regimes.
 

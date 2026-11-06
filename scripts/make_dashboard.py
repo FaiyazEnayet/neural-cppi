@@ -12,7 +12,11 @@ the page builds, not enough to learn anything real.
 """
 
 import argparse
+import glob
+import hashlib
+import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(
@@ -29,6 +33,86 @@ FLOORS = (85.0, 90.0, 95.0)
 HORIZONS = (30, 63)
 MULTIPLIERS = (3.0, 4.0, 5.0)
 N_PATHS = 1000
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+# Results tables read by results_figures; runs/ is gitignored, so a
+# fresh clone has none of these on disk.
+METRICS_FILES = (
+    "runs/cppi/metrics.json",
+    "runs/cppi_multi/metrics.json",
+    "runs/cppi_multi/drawdown_63d.json",
+)
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _git_commit(root=ROOT):
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root,
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        commit = out.stdout.strip()
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+    if len(commit) == 40 and all(c in "0123456789abcdef" for c in commit):
+        return commit
+    return "unknown"
+
+
+def dashboard_lineage(fast=False):
+    """Hashed lineage for one dashboard build.
+
+    Records the build config, the SHA-256 of every committed
+    market-data file the demo training reads, the SHA-256 of every
+    runs/ metrics file embedded as a results table (or "absent" when
+    the file is not on disk), and the code commit when git can
+    report one. No checkpoint hash exists for the demo policies:
+    they are trained live for the page, so the config and the seeds
+    stand in for a checkpoint identifier.
+    """
+    if fast:
+        floors, horizons, mults = (90.0,), (30,), (4.0,)
+        n_epochs, n_epochs_multi, n_paths = 2, 2, 64
+    else:
+        floors, horizons, mults = FLOORS, HORIZONS, MULTIPLIERS
+        n_epochs, n_epochs_multi, n_paths = 40, 25, N_PATHS
+    data_files = sorted(
+        glob.glob(os.path.join(ROOT, "data", "spy_daily_*.csv")))
+    if not fast:
+        for ticker in ("tlt", "gld"):
+            data_files.extend(sorted(glob.glob(
+                os.path.join(ROOT, "data", f"{ticker}_daily_*.csv"))))
+    data = {}
+    for path in sorted(data_files):
+        data[os.path.relpath(path, ROOT)] = _file_sha256(path)
+    metrics = {}
+    for rel in METRICS_FILES:
+        path = os.path.join(ROOT, rel)
+        metrics[rel] = _file_sha256(path) if os.path.exists(path) else "absent"
+    return {
+        "generator": "scripts/make_dashboard.py",
+        "fast": bool(fast),
+        "config": {
+            "floors": list(floors),
+            "horizons": list(horizons),
+            "multipliers": list(mults),
+            "n_epochs": n_epochs,
+            "n_epochs_multi": n_epochs_multi,
+            "n_paths": n_paths,
+            "seeds": {"policy": 7, "simulation": 999, "multi": 11},
+        },
+        "data": data,
+        "metrics": metrics,
+        "commit": _git_commit(),
+    }
 
 
 def _dropdown(labels):
@@ -310,6 +394,11 @@ def build(out_path, fast=False):
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(_portfolio_html(html))
+    lineage_path = os.path.splitext(out_path)[0] + "-lineage.json"
+    with open(lineage_path, "w", encoding="utf-8") as fh:
+        json.dump(dashboard_lineage(fast), fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    print(f"wrote {lineage_path}", flush=True)
     print(f"wrote {out_path} ({os.path.getsize(out_path) / 1e6:.1f} MB)",
           flush=True)
 

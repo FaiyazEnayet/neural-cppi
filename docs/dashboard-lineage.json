@@ -1,0 +1,43 @@
+{
+  "commit": "5841c2a2b2c7f71e265e4bdef5f3f6ff9d650c8e",
+  "config": {
+    "floors": [
+      85.0,
+      90.0,
+      95.0
+    ],
+    "horizons": [
+      30,
+      63
+    ],
+    "multipliers": [
+      3.0,
+      4.0,
+      5.0
+    ],
+    "n_epochs": 40,
+    "n_epochs_multi": 25,
+    "n_paths": 1000,
+    "seeds": {
+      "multi": 11,
+      "policy": 7,
+      "simulation": 999
+    }
+  },
+  "data": {
+    "data/gld_daily_2015.csv": "4e5f0bbd2029436c2665cf5703638b443337c2a183d09204c55809662a48d995",
+    "data/gld_daily_2021.csv": "fa0d8ae1844d557c274815527d423a49f78d667cb9fdbcd5e04336853a9034bf",
+    "data/spy_daily_2007.csv": "21bea3bc34a96059c2618e72d6808e1c20f485dada0d686a82ebe92bc284e347",
+    "data/spy_daily_2015.csv": "6eee0166cdbe8babd32c361184d4678afbb5fdcc5eeb2e67b8e7940f2dbf1c7b",
+    "data/spy_daily_2021.csv": "faef1340c97465edfb40a8c7cd78735b62bb616b97c4fc7413b5121f0abbfb8f",
+    "data/tlt_daily_2015.csv": "7c28e939584d80aaef67d199b81f132c1f01cd3753bf9e51f4cd245071fa8cd5",
+    "data/tlt_daily_2021.csv": "257fb843d03ba9febf60560381a8690d857e349266f6278ec8c435da5a307086"
+  },
+  "fast": false,
+  "generator": "scripts/make_dashboard.py",
+  "metrics": {
+    "runs/cppi/metrics.json": "b85960b4fa44ea373336d6ee92b591b469bfef4ea052209532bac323ae4b82f8",
+    "runs/cppi_multi/drawdown_63d.json": "179a728ed0495ff59db3afc28cc5404b65af30287ae017983a43edd5ec18ba52",
+    "runs/cppi_multi/metrics.json": "a6b4eb4b2e12ad2bef94f278beda5c5ac3948ad0a7bab76141f4721dfe2721d1"
+  }
+}

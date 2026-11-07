@@ -3,7 +3,14 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-runs/
+runs/*
+!runs/cppi/
+runs/cppi/*
+!runs/cppi/metrics.json
+!runs/cppi_multi/
+runs/cppi_multi/*
+!runs/cppi_multi/metrics.json
+!runs/cppi_multi/drawdown_63d.json
 *.ipynb_checkpoints/
 .DS_Store
 .pytest_cache/

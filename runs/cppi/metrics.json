@@ -1,0 +1,62 @@
+{
+  "30d": {
+    "classic_m3": {
+      "mean_wealth": 100.5167236328125,
+      "std_wealth": 1.607095718383789,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 99.1135482788086
+    },
+    "classic_m4": {
+      "mean_wealth": 100.58194732666016,
+      "std_wealth": 2.1393344402313232,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 98.80547332763672
+    },
+    "classic_m5": {
+      "mean_wealth": 100.63504791259766,
+      "std_wealth": 2.6667227745056152,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 98.505615234375
+    },
+    "learned": {
+      "mean_wealth": 100.64132690429688,
+      "std_wealth": 2.0428619384765625,
+      "p_breach_terminal": 0.00105,
+      "p_breach_anytime": 0.0018,
+      "mean_min_wealth": 98.77406311035156
+    }
+  },
+  "63d": {
+    "classic_m3": {
+      "mean_wealth": 101.22492218017578,
+      "std_wealth": 2.4580416679382324,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 98.7729263305664
+    },
+    "classic_m4": {
+      "mean_wealth": 101.41233825683594,
+      "std_wealth": 3.3133938312530518,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 98.33956909179688
+    },
+    "classic_m5": {
+      "mean_wealth": 101.57498931884766,
+      "std_wealth": 4.18112325668335,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 97.9207992553711
+    },
+    "learned": {
+      "mean_wealth": 101.69791412353516,
+      "std_wealth": 3.630521297454834,
+      "p_breach_terminal": 0.0028,
+      "p_breach_anytime": 0.007,
+      "mean_min_wealth": 97.88497924804688
+    }
+  }
+}

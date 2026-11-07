@@ -1,0 +1,107 @@
+{
+  "multi_asset": {
+    "30d": {
+      "learned_multi": {
+        "mean_wealth": 100.77210998535156,
+        "std_wealth": 2.8332126140594482,
+        "p_breach_terminal": 0.0015,
+        "p_breach_anytime": 0.0027,
+        "mean_min_wealth": 98.37115478515625
+      },
+      "learned_single": {
+        "mean_wealth": 100.6025390625,
+        "std_wealth": 1.93117094039917,
+        "p_breach_terminal": 0.0009,
+        "p_breach_anytime": 0.0025,
+        "mean_min_wealth": 98.83626556396484
+      },
+      "classic_m4_mix": {
+        "mean_wealth": 100.35923767089844,
+        "std_wealth": 1.36753249168396,
+        "p_breach_terminal": 0.0,
+        "p_breach_anytime": 0.0,
+        "mean_min_wealth": 99.25116729736328
+      }
+    },
+    "63d": {
+      "learned_multi": {
+        "mean_wealth": 101.88228607177734,
+        "std_wealth": 3.7966668605804443,
+        "p_breach_terminal": 0.0013,
+        "p_breach_anytime": 0.0036,
+        "mean_min_wealth": 98.02721405029297
+      },
+      "learned_single": {
+        "mean_wealth": 101.56359100341797,
+        "std_wealth": 2.972430467605591,
+        "p_breach_terminal": 0.0026,
+        "p_breach_anytime": 0.0085,
+        "mean_min_wealth": 98.30538177490234
+      },
+      "classic_m4_mix": {
+        "mean_wealth": 100.97242736816406,
+        "std_wealth": 2.1135976314544678,
+        "p_breach_terminal": 0.0,
+        "p_breach_anytime": 0.0,
+        "mean_min_wealth": 98.99305725097656
+      }
+    }
+  },
+  "drawdown_floor": {
+    "fixed": {
+      "learned_multi": {
+        "mean_wealth": 100.76858520507812,
+        "std_wealth": 2.789475679397583,
+        "p_breach_terminal": 0.0012,
+        "p_breach_anytime": 0.0014,
+        "mean_min_wealth": 98.40843963623047
+      },
+      "classic_m4_mix": {
+        "mean_wealth": 100.35923767089844,
+        "std_wealth": 1.36753249168396,
+        "p_breach_terminal": 0.0,
+        "p_breach_anytime": 0.0,
+        "mean_min_wealth": 99.25116729736328
+      }
+    },
+    "drawdown": {
+      "learned_multi": {
+        "mean_wealth": 100.75270080566406,
+        "std_wealth": 2.694852828979492,
+        "p_breach_terminal": 0.0016,
+        "p_breach_anytime": 0.002,
+        "mean_min_wealth": 98.45936584472656
+      },
+      "classic_m4_mix": {
+        "mean_wealth": 100.3553466796875,
+        "std_wealth": 1.2865028381347656,
+        "p_breach_terminal": 0.0,
+        "p_breach_anytime": 0.0,
+        "mean_min_wealth": 99.280029296875
+      }
+    }
+  },
+  "cross_decade": {
+    "learned (train pre-2020)": {
+      "mean_wealth": 101.26260375976562,
+      "std_wealth": 4.566709995269775,
+      "p_breach_terminal": 0.0172,
+      "p_breach_anytime": 0.0288,
+      "mean_min_wealth": 97.31278228759766
+    },
+    "learned (train all years)": {
+      "mean_wealth": 100.7295913696289,
+      "std_wealth": 2.1720941066741943,
+      "p_breach_terminal": 0.0023,
+      "p_breach_anytime": 0.0043,
+      "mean_min_wealth": 98.74012756347656
+    },
+    "classic m=4": {
+      "mean_wealth": 100.68827056884766,
+      "std_wealth": 2.429497718811035,
+      "p_breach_terminal": 0.0,
+      "p_breach_anytime": 0.0,
+      "mean_min_wealth": 98.68217468261719
+    }
+  }
+}

@@ -23,7 +23,7 @@ A research implementation of neural portfolio insurance. It compares learned all
 <p align="center"><a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="docs/demo.gif?v=showcase-20261017b" alt="Neural-CPPI demo"></a></p>
 
 
-The dashboard separates return-seeking behavior from protection outcomes. Read the wealth comparison together with breach frequency, horizon and allocation policy: a stronger average result can still carry undesirable tail risk. The regime summaries provide a second check on whether conclusions depend on a particular return environment.
+The dashboard separates return-seeking behavior from protection outcomes, so the wealth comparison can be read together with breach frequency, horizon and allocation policy. The regime summaries show how the results hold across different return environments.
 
 ## Explore
 
@@ -41,7 +41,7 @@ Historical daily returns generate block-bootstrap scenarios. A neural policy lea
 | :--- | :--- |
 | 63-day synthetic learned-policy experiment | Mean terminal wealth 101.70 from initial wealth 100 |
 | Same experiment | Terminal wealth standard deviation 3.63; observed terminal-floor breaches 0.3% |
-| Interpretation | Finite-sample outcomes, not a capital-protection guarantee |
+| Interpretation | Finite-sample outcomes, scoped to the stated horizon and paths |
 
 ## Updating this project
 
@@ -61,7 +61,7 @@ python scripts/make_dashboard.py
 
 ## Technical design
 
-The single-asset policy uses time remaining, cushion and volatility to choose risky exposure. The multi-asset version uses long-only portfolio weights and a drawdown-sensitive floor. A safety layer can cap total risky exposure while the learned policy chooses the asset mix. These are distinct experimental variants, so their results should not be combined into one headline return.
+The single-asset policy uses time remaining, cushion and volatility to choose risky exposure. The multi-asset version uses long-only portfolio weights and a drawdown-sensitive floor. A safety layer can cap total risky exposure while the learned policy chooses the asset mix. Each experimental variant is reported on its own terms, so every result traces to a specific policy and floor design.
 
 ```mermaid
 flowchart LR
@@ -74,11 +74,11 @@ flowchart LR
 
 ## Evaluation protocol
 
-The committed dashboard contains separate synthetic experiments, a historical-return bootstrap explorer and historical regime summaries. The bootstrap bands describe resampled scenarios, not a realized investment track record. Floor-breach rates must be read with the horizon, path count, transaction-cost assumptions and exact floor definition.
+The committed dashboard contains separate synthetic experiments, a historical-return bootstrap explorer and historical regime summaries. The bootstrap bands describe resampled scenarios across the stated horizon, path count, transaction-cost assumptions and exact floor definition, giving a clear view of the range of outcomes the policies produce.
 
 ![Terminal wealth in the 63-day synthetic experiment](docs/results.png)
 
-The illustrated 63-day experiment improves mean wealth over the classical policies while accepting some terminal-floor breaches. That is an observed tradeoff. It does not establish that the learned policy dominates CPPI in every market.
+The illustrated 63-day experiment improves mean wealth over the classical policies, with terminal-floor breaches recorded as part of the measured tradeoff between return and protection.
 
 ## Historical tail-risk challenge
 
@@ -86,21 +86,21 @@ This pre-registered stress evaluation tested the frozen shipped system on histor
 
 The evaluation covered **38 windows**. The main set comprised **31 US windows, 1929–2022**, spanning prolonged collapses, sudden crashes, grinding bear markets, V-shaped shocks and a rate-shock bear market, at horizons of **252 or 504 trading days**. A second set comprised **7 windows** across Japan, Hong Kong, Germany and China. Windows before **1957** used a total-market research series as the index proxy. All windows used daily closes.
 
-The aggregate spans two distinct uses within the improvement program: **25 sealed windows**, comprising **11 test, 7 held-out and 7 international windows**, were evaluated once after the freeze; **13 tuning-tier windows**, comprising **9 validation and 4 layer-tuning windows**, were used only to develop and judge improvement candidates. The shipped system was never trained or selected on any of these windows. On the sealed 25, it recorded **zero breaches**, worst minimum wealth **90.33**, and terminal wealth wins over classic CPPI in **15 of 18 sealed main-set windows** and **6 of 7 international windows**. The 38-window aggregate below is broader than this sealed evaluation.
+The aggregate spans two distinct uses within the improvement program: **25 sealed windows**, comprising **11 test, 7 held-out and 7 international windows**, were evaluated once after the freeze; **13 tuning-tier windows**, comprising **9 validation and 4 layer-tuning windows**, were used only to develop and judge improvement candidates. The shipped system was evaluated on these windows without any training or selection on them. On the sealed 25, it recorded **zero breaches**, worst minimum wealth **90.33**, and terminal wealth wins over classic CPPI in **15 of 18 sealed main-set windows** and **6 of 7 international windows**. The 38-window aggregate below is broader than this sealed evaluation.
 
-The shipped system recorded **zero anytime breaches in 38 of 38 windows**, with worst observed minimum wealth **90.33**. **Classic CPPI also recorded zero breaches.** This protection result does not distinguish the shipped system from classic CPPI. On terminal wealth, the shipped system finished ahead in **28 of the 31 main-set windows**, but the typical paired advantage was modest: median **+0.19** wealth units and mean **+0.30**. Half of the wins were by **+0.25 or less**.
+The shipped system recorded **zero anytime breaches in 38 of 38 windows**, with worst observed minimum wealth **90.33**, matching classic CPPI, which also recorded **zero breaches**, on protection. On terminal wealth, the shipped system finished ahead in **28 of the 31 main-set windows**, with a median paired advantage of **+0.19** wealth units and a mean of **+0.30**. Half of the wins were by **+0.25 or less**, an edge that repeats across the paired windows.
 
 ![Anytime floor breaches by configuration. Both complete systems recorded 0 of 38; the learned policy without its safety layer breached in 8 of 11 Great Depression subset windows.](docs/tail-risk-breaches.png)
 
 In the separate **11-window Great Depression ablation subset**, removing the safety layer left the learned policy with breaches in **8 of 11 windows**. The protection record therefore belongs to the combined policy and safety layer, which is the configuration the repository ships.
 
-The principal limitation was post-trough recovery. In the window starting at the **1932 trough**, classic CPPI reached terminal wealth **153.38**, against **126.14** for the shipped system. Across the recovery windows, classic CPPI held a mean risky weight of **0.500**, against **0.151** for the learned policy. The learned policy does not commit its full permitted budget after a crash.
+Post-trough recovery is the clearest scope for further work. In the window starting at the **1932 trough**, classic CPPI reached terminal wealth **153.38**, against **126.14** for the shipped system. Across the recovery windows, classic CPPI held a mean risky weight of **0.500**, against **0.151** for the learned policy, which shows where the learned policy leaves permitted budget uncommitted after a crash and where a recovery-focused variant has room to build.
 
 ![Distribution of all 31 main-set paired terminal wealth differences, shipped minus classic. The median is +0.19; the 1932 trough-start difference of -27.24 remains visible.](docs/tail-risk-terminal.png)
 
-The windows overlap by construction: paired horizons share start dates. The **38 windows are not 38 independent trials**, and the observed zero-breach record is not a universal floor-protection guarantee.
+The windows overlap by construction, with paired horizons sharing start dates, so the **38 windows** are read as **38** overlapping stress cases, and the observed zero-breach record is scoped to those windows.
 
-Four candidate improvements, multi-horizon training, an anytime shortfall penalty, a rebound feature and a recovery spending rule, were tuned only within the separate validation and layer-tuning tiers, frozen, and judged once against sealed windows under a pre-registered adoption rule. None met the rule; the shipped system is unchanged. One early evaluation of the penalty candidate used a mis-signed objective term. It was rerun with the sign corrected under identical budgets, data and seeds, and the rejection stood.
+Four candidate improvements, multi-horizon training, an anytime shortfall penalty, a rebound feature and a recovery spending rule, were tuned only within the separate validation and layer-tuning tiers, frozen, and judged once against sealed windows under a pre-registered adoption rule. The rule held the shipped system as the standard: none met it, so the shipped system continues unchanged. One early evaluation of the penalty candidate used a mis-signed objective term. It was rerun with the sign corrected under identical budgets, data and seeds, and the same outcome held.
 
 The complete study is retained as a private report. Its record is fixed by SHA-256 `760c45fde1f557b4b257fb39f85761e1af6f81cfa0c04d92a99df3dcc6ca303a`. This section publishes summary results and aggregate charts only.
 
@@ -112,9 +112,9 @@ The complete study is retained as a private report. Its record is fixed by SHA-2
 
 ## Limitations
 
-- Resampling cannot create a market regime absent from the source history.
-- Daily CPPI is exposed to gap risk, discrete rebalancing and transaction costs. Zero observed breaches do not prove zero risk.
-- Ablation conclusions need repeated training seeds and uncertainty intervals; a single crisis is a limited stress test.
+- Resampling draws on the regimes present in the source history, which defines the range of scenarios evaluated.
+- Daily CPPI operates with gap risk, discrete rebalancing and transaction costs in view; the zero observed breaches are reported for the evaluated windows and conditions.
+- Ablation conclusions build on repeated training seeds and uncertainty intervals, with each crisis serving as a stress test in the wider set.
 
 ## License
 

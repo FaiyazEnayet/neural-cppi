@@ -23,7 +23,7 @@ A research implementation of neural portfolio insurance. It compares learned all
 <p align="center"><a href="https://faiyazenayet.github.io/neural-cppi/docs/dashboard.html"><img src="docs/demo.gif?v=showcase-20261017b" alt="Neural-CPPI demo"></a></p>
 
 
-The dashboard separates return-seeking behavior from protection outcomes, so the wealth comparison can be read together with breach frequency, horizon and allocation policy. The regime summaries show how the results hold across different return environments.
+The dashboard separates return-seeking behavior from protection outcomes, so the wealth comparison can be read together with breach frequency, horizon, and allocation policy. The regime summaries show how the results hold across different return environments.
 
 ## Explore
 
@@ -74,7 +74,7 @@ flowchart LR
 
 ## Evaluation protocol
 
-The committed dashboard contains separate synthetic experiments, a historical-return bootstrap explorer and historical regime summaries. The bootstrap bands describe resampled scenarios across the stated horizon, path count, transaction-cost assumptions and exact floor definition, giving a clear view of the range of outcomes the policies produce.
+The committed dashboard contains separate synthetic experiments, a historical-return bootstrap explorer and historical regime summaries. The bootstrap bands describe resampled scenarios across the stated horizon, path count, transaction-cost assumptions, and exact floor definition, giving a clear view of the range of outcomes the policies produce.
 
 ![Terminal wealth in the 63-day synthetic experiment](docs/results.png)
 
@@ -94,7 +94,7 @@ The shipped system recorded **zero anytime breaches in 38 of 38 windows**, with 
 
 In the separate 11-window Great Depression ablation subset, removing the safety layer left the learned policy with breaches in **8 of 11 windows**. The protection record therefore belongs to the combined policy and safety layer, which is the configuration the repository ships.
 
-The principal limitation was post-trough recovery. In the window starting at the 1932 trough, classic CPPI reached terminal wealth 153.38, against 126.14 for the shipped system. Across the recovery windows, classic CPPI held a mean risky weight of 0.500, against 0.151 for the learned policy. The learned policy does not commit its full permitted budget after a crash.
+The principal limitation was post-trough recovery. In the window starting at the 1932 trough, classic CPPI reached terminal wealth of 153.38, against 126.14 for the shipped system. Across the recovery windows, classic CPPI held a mean risky weight of 0.500, against 0.151 for the learned policy. The learned policy does not commit its full permitted budget after a crash.
 
 ![Distribution of all 31 main-set paired terminal wealth differences, shipped minus classic. The median is +0.19; the 1932 trough-start difference of -27.24 remains visible.](docs/tail-risk-terminal.png)
 

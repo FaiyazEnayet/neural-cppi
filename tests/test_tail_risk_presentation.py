@@ -38,12 +38,18 @@ def test_publication_charts_are_embedded_without_external_dependencies():
  assert raw.index('href="#wealth"') < raw.index('href="#tail-risk"')
 
 def test_readme_section_is_complete_and_uses_published_paths():
- section=(ROOT/'historical-tail-risk-section.md').read_text(encoding='utf8')
  readme=(ROOT/'README.md').read_text(encoding='utf8')
- assert section.strip() in readme
- assert section.startswith('## Historical tail-risk challenge')
+ match=re.search(r'^## Historical tail-risk challenge[ \t]*\n(.*?)(?=^#{1,2} |\Z)',readme,re.M|re.S)
+ assert match, 'The README is missing the historical tail-risk section'
+ section=match[1].replace('**','')
+ d=summary()
+ tiers=d['tiers']
  assert chr(0x2014) not in section
- assert summary()['report_sha256'] in section
- for key in ['breaches','terminal']:assert 'docs/tail-risk-'+key+'.png' in section
- assert '25 sealed windows' in section and '13 tuning-tier windows' in section
- assert 'Classic CPPI also recorded zero breaches.' in section
+ assert d['report_sha256'] in section
+ for key in ['breaches','terminal']:
+  assert re.search(rf'!\[[^\n]*\]\(docs/tail-risk-{key}\.png\)',section)
+ assert f"{tiers['sealed']} sealed windows" in section
+ assert f"{tiers['tuning']} tuning-tier windows" in section
+ assert f"Both complete systems recorded {d['classic_breaches']} of {d['windows']}" in section
+ assert f"{d['ablation']['windows']}-window Great Depression ablation subset" in section
+ assert f"{d['ablation']['breaches']} of {d['ablation']['windows']} windows" in section

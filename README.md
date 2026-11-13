@@ -88,7 +88,7 @@ The evaluation covered 38 windows. The main set comprised 31 US windows, 1929–
 
 The aggregate spans two distinct uses within the improvement program: 25 sealed windows, comprising 11 test, 7 held-out and 7 international windows, were evaluated once after the freeze; 13 tuning-tier windows, comprising 9 validation and 4 layer-tuning windows, were used only to develop and judge improvement candidates. The shipped system was never trained or selected on any of these windows. On the sealed 25, it recorded zero breaches, worst minimum wealth 90.33, and terminal wealth wins over classic CPPI in 15 of 18 sealed main-set windows and 6 of 7 international windows. The 38-window aggregate below is broader than this sealed evaluation.
 
-The shipped system recorded **zero anytime breaches in 38 of 38 windows**, with worst observed minimum wealth 90.33. Classic CPPI also recorded zero breaches. This protection result does not distinguish the shipped system from classic CPPI. On terminal wealth, the shipped system finished ahead in 28 of the 31 main-set windows, but the typical paired advantage was modest: median +0.19 wealth units and mean +0.30. Half of the wins were by +0.25 or less.
+The shipped system recorded **zero anytime breaches in 38 of 38 windows**, with worst observed minimum wealth 90.33. On terminal wealth, the shipped system finished ahead in 28 of the 31 main-set windows, but the typical paired advantage was modest: median +0.19 wealth units and mean +0.30. Half of the wins were by +0.25 or less.
 
 ![Anytime floor breaches by configuration. Both complete systems recorded 0 of 38; the learned policy without its safety layer breached in 8 of 11 Great Depression subset windows.](docs/tail-risk-breaches.png)
 

@@ -53,3 +53,9 @@ def test_readme_section_is_complete_and_uses_published_paths():
  assert f"Both complete systems recorded {d['classic_breaches']} of {d['windows']}" in section
  assert f"{d['ablation']['windows']}-window Great Depression ablation subset" in section
  assert f"{d['ablation']['breaches']} of {d['ablation']['windows']} windows" in section
+
+def test_readme_section_matches_locked_file_verbatim():
+ section=(ROOT/'historical-tail-risk-section.md').read_text(encoding='utf8')
+ readme=(ROOT/'README.md').read_text(encoding='utf8')
+ assert section.startswith('## Historical tail-risk challenge')
+ assert section.strip() in readme

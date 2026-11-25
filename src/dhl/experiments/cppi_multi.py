@@ -13,6 +13,13 @@ Three extensions over the single-asset CPPI experiment in
    evaluate on 2020+ paths that include the COVID crash: an honest
    out-of-distribution test.
 
+P1-D pins the economics: per-trade ledger reconciliation against an
+independent scalar reference, explicit floor_t timestamps, minimum
+data availability on the multi-asset path, a shared cap of 1.0
+across candidates, independent portfolio risk contributions, a
+dynamic CPPI total-risk-budget candidate, and a multi-asset
+cross-decade comparison with the classic baseline.
+
 Stocks and cash only. No derivatives, no shorting, no leverage
 anywhere. The new comparisons below all use a max risky allocation
 of 1.0 (no leverage); the original single-asset README numbers used
@@ -74,6 +81,12 @@ def block_bootstrap_paths_multi(rets, tickers, n_paths, path_len,
     R = np.stack([r[:n] for r in rs], axis=1)  # (n, n_assets)
     if n < block_len:
         raise ValueError(f"need at least block_len={block_len} returns")
+    if path_len > n:
+        # A path longer than the aligned history would repeat history
+        # end to end: fail closed instead of silently wrapping.
+        raise ValueError(
+            f"need at least path_len={path_len} aligned returns to draw "
+            f"a path without repeating history, got {n}")
     rng = np.random.default_rng(seed)
     n_blocks = int(np.ceil(path_len / block_len))
     starts = rng.integers(0, n, size=(n_paths, n_blocks))
@@ -139,6 +152,44 @@ class MultiAssetPolicy(nn.Module):
         return torch.softmax(self.net(x), dim=1)
 
 
+def floor_timestamps(dates, steps):
+    """Calendar dates governing each entry of the floor series F.
+
+    ``rollout_multi(..., return_path=True)`` returns F with ``steps+1``
+    entries aligned to the ``steps+1`` price dates of a path: F[0] is
+    the floor at the start date ``dates[0]`` (the date-0 floor), and
+    F[j] for j >= 1 is the floor governing date-j wealth, set by the
+    wealth peak through date j-1. Raises ValueError unless ``dates``
+    lists exactly ``steps+1`` dates.
+    """
+    if len(dates) != steps + 1:
+        raise ValueError(
+            f"floor series of {steps + 1} entries needs {steps + 1} "
+            f"dates, got {len(dates)}")
+    return list(dates)
+
+
+def risk_contributions(weights, cov):
+    """Per-asset share of portfolio volatility.
+
+    RC_i = w_i * (Sigma w)_i / sigma_p**2, so the shares sum to one
+    whenever portfolio volatility is positive. ``weights`` and ``cov``
+    cover the risky assets only. Raises ValueError on non-finite
+    inputs, shape mismatch, or zero portfolio variance.
+    """
+    w = np.asarray(weights, dtype=float)
+    S = np.asarray(cov, dtype=float)
+    if w.ndim != 1 or S.ndim != 2 or S.shape != (len(w), len(w)):
+        raise ValueError(
+            f"weights shape {w.shape} and cov shape {S.shape} must agree")
+    if not (np.isfinite(w).all() and np.isfinite(S).all()):
+        raise ValueError("weights and cov must be finite")
+    var = float(w @ S @ w)
+    if var <= 0.0:
+        raise ValueError("portfolio variance must be positive")
+    return w * (S @ w) / var
+
+
 def _floor_series(V_path, floor_mode, floor, max_dd):
     """Floor value at each date given the wealth path so far.
 
@@ -153,7 +204,7 @@ def _floor_series(V_path, floor_mode, floor, max_dd):
 
 def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
                   max_dd=MAX_DD, r=R, dt=DT, cost_rate=COST_RATE,
-                  return_path=False):
+                  return_path=False, return_ledger=False):
     """Self-financing multi-asset portfolio under a dynamic allocation.
 
     P has shape (n_paths, n_steps + 1, n_assets), each asset starting
@@ -162,7 +213,10 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
     column cash, nonnegative and summing to one. Returns terminal
     wealth per path; with return_path=True also the wealth and floor
     paths. The final wealth path point is post-liquidation wealth,
-    so W[:, -1] == V_T exactly.
+    so W[:, -1] == V_T exactly. With return_ledger=True also returns
+    a per-rebalance ledger (wealth_before, fee, wealth_post,
+    cash_post, holdings_post, one row per step per path) so every
+    trade's financing reconciles: wealth_post + fee == wealth_before.
 
     Accounting is an explicit (cash, holdings) ledger, not a wealth
     shortcut. Each rebalance goes through the shared kernel
@@ -204,6 +258,8 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
     V = cash.clone()
     wealth_path = [V.clone()] if return_path else None
     floor_vals = []
+    ledger = {"wealth_before": [], "fee": [], "wealth_post": [],
+              "cash_post": [], "holdings_post": []} if return_ledger else None
 
     for i in range(steps):
         peak = V.clone() if i == 0 else torch.maximum(peak, V)
@@ -222,6 +278,12 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         V = cash + holdings.sum(dim=1)
         D, cash_post, _fee, _Vp = rebalance_multi(V, holdings, w_risky,
                                                   cost_rate)
+        if return_ledger:
+            ledger["wealth_before"].append(V.detach().clone())
+            ledger["fee"].append(_fee.detach().clone())
+            ledger["wealth_post"].append(_Vp.detach().clone())
+            ledger["cash_post"].append(cash_post.detach().clone())
+            ledger["holdings_post"].append(D.detach().clone())
         cash = cash_post * growth
         V = cash + (D * rets[:, i, :]).sum(dim=1)
         if return_path:
@@ -238,8 +300,17 @@ def rollout_multi(P, weight_fn, floor_mode="fixed", floor=FLOOR,
         # fixed-floor parameter: in drawdown mode those differ
         # whenever floor != (1 - max_dd) * V0.
         F = torch.stack([floor_vals[0]] + floor_vals, dim=1)
+        if return_ledger:
+            return V, W, F, _stack_ledger(ledger)
         return V, W, F
+    if return_ledger:
+        return V, _stack_ledger(ledger)
     return V
+
+
+def _stack_ledger(ledger):
+    """Ledger lists of per-step tensors -> stacked numpy arrays."""
+    return {k: torch.stack(v).numpy() for k, v in ledger.items()}
 
 
 def _learned_multi_weight_fn(policy):
@@ -266,6 +337,36 @@ def _classic_multi_weight_fn(mix=MIX, multiplier=4.0, cap=1.0):
         w = torch.zeros(V.shape[0], len(mix) + 1,
                         device=V.device, dtype=V.dtype)
         w[:, : len(mix)] = w_risky.unsqueeze(1) * mix_t.to(V.device)
+        w[:, -1] = 1.0 - w_risky
+        return w
+
+    return fn
+
+
+def _risk_budget_multi_weight_fn(multiplier=4.0, cap=1.0):
+    """Dynamic CPPI total-risk budget.
+
+    The CPPI cushion sets the total risky budget (``multiplier *
+    cushion``, capped at ``cap``), and the budget is split across
+    assets in inverse proportion to realized volatility, so the
+    riskier asset gets the smaller slice. Falls back to the equal
+    mix when vols are zero or non-finite. Cash takes the remainder.
+    """
+    def fn(i, V, tau_frac, cushion, vols_i, trail_i, floor_t):
+        w_risky = classic_cppi_weight(
+            V, floor=floor_t, multiplier=multiplier, cap=cap)
+        if not torch.is_tensor(w_risky):
+            w_risky = torch.full_like(V, w_risky)
+        na = vols_i.shape[1]
+        vols = vols_i.clamp_min(1e-6)
+        inv = 1.0 / vols
+        shares = inv / inv.sum(dim=1, keepdim=True)
+        finite = torch.isfinite(vols_i).all(dim=1)
+        equal = torch.full_like(shares, 1.0 / na)
+        shares = torch.where(finite.unsqueeze(1), shares, equal)
+        w = torch.zeros(V.shape[0], na + 1,
+                        device=V.device, dtype=V.dtype)
+        w[:, :na] = w_risky.unsqueeze(1) * shares
         w[:, -1] = 1.0 - w_risky
         return w
 
@@ -415,13 +516,20 @@ def experiment_multi_asset(dates, rets, horizons=(30, 63),
         # Classic CPPI on the equal-weight mix.
         m_classic = evaluate_multi(_classic_multi_weight_fn(), P_test)
 
+        # Dynamic CPPI total-risk budget: the cushion sets the total
+        # risky budget, realized vol splits it across assets.
+        m_risk_budget = evaluate_multi(_risk_budget_multi_weight_fn(),
+                                       P_test)
+
         _print_row("learned multi (3 assets)", m_multi)
         _print_row("learned single (SPY)", m_single)
         _print_row("classic m=4 (mix)", m_classic)
+        _print_row("risk budget m=4", m_risk_budget)
         out[f"{horizon}d"] = {
             "learned_multi": m_multi,
             "learned_single": m_single,
             "classic_m4_mix": m_classic,
+            "risk_budget_m4": m_risk_budget,
         }
     return out
 
@@ -516,6 +624,78 @@ def experiment_cross_decade(dates, rets, horizon=30, n_epochs=N_EPOCHS,
     return out
 
 
+def _split_joint_by_date(dates, rets, cut="2020-01-01"):
+    """Split aligned joint returns into pre/post slices at a date cut.
+
+    ``dates[i]`` is the end date of ``rets[i]`` (the same convention
+    as ``experiment_cross_decade``). Returns ``(pre, post)`` dicts of
+    ticker -> returns. Raises ValueError if either side is shorter
+    than BLOCK_LEN: a cross-decade comparison may not run on a slice
+    too short to bootstrap.
+    """
+    d = np.array(dates[1:])
+    pre_mask = d < cut
+    post_mask = ~pre_mask
+    if int(pre_mask.sum()) < BLOCK_LEN or int(post_mask.sum()) < BLOCK_LEN:
+        raise ValueError(
+            f"need at least {BLOCK_LEN} returns on each side of {cut}, "
+            f"got {int(pre_mask.sum())} pre and "
+            f"{int(post_mask.sum())} post")
+    pre = {t: np.asarray(r)[pre_mask] for t, r in rets.items()}
+    post = {t: np.asarray(r)[post_mask] for t, r in rets.items()}
+    return pre, post
+
+
+def experiment_cross_decade_multi(dates, rets, horizon=30,
+                                  n_epochs=N_EPOCHS, batch_size=BATCH_SIZE,
+                                  n_test=N_TEST, seed=SEED):
+    """Multi-asset cross-decade: train before 2020, test on 2020+.
+
+    The joint three-asset version of ``experiment_cross_decade``:
+    the learned multi-asset policy meets a regime it never trained
+    on, with a same-data policy as the upper reference and classic
+    CPPI on the equal-weight mix as the independent baseline.
+    """
+    pre, post = _split_joint_by_date(dates, rets)
+    print(f"\ncross-decade multi: {len(pre['SPY'])} pre-2020 returns, "
+          f"{len(post['SPY'])} 2020+ returns", flush=True)
+
+    def pre_sampler(n, s):
+        return block_bootstrap_paths_multi(
+            pre, TICKERS, n, horizon, BLOCK_LEN, S0=V0, seed=s)
+
+    def post_sampler(n, s):
+        return block_bootstrap_paths_multi(
+            post, TICKERS, n, horizon, BLOCK_LEN, S0=V0, seed=s)
+
+    P_test = post_sampler(n_test, seed + 999)
+
+    policy_pre = seeded_policy(MultiAssetPolicy, len(TICKERS), seed=seed)
+    train_multi_policy(policy_pre, pre_sampler, horizon,
+                       n_epochs=n_epochs, batch_size=batch_size,
+                       seed=seed, log_every=0)
+    policy_all = seeded_policy(MultiAssetPolicy, len(TICKERS), seed=seed)
+    train_multi_policy(
+        policy_all,
+        lambda n, s: block_bootstrap_paths_multi(
+            rets, TICKERS, n, horizon, BLOCK_LEN, S0=V0, seed=s),
+        horizon, n_epochs=n_epochs, batch_size=batch_size,
+        seed=seed, log_every=0)
+
+    print(f"\n=== cross-decade multi, horizon {horizon}d, test on 2020+ ===",
+          flush=True)
+    out = {}
+    for name, pol in (("learned_multi (train pre-2020)", policy_pre),
+                      ("learned_multi (train all years)", policy_all)):
+        m = evaluate_multi(_learned_multi_weight_fn(pol), P_test)
+        _print_row(name, m)
+        out[name] = m
+    m_classic = evaluate_multi(_classic_multi_weight_fn(), P_test)
+    _print_row("classic m=4 (mix)", m_classic)
+    out["classic m=4 (mix)"] = m_classic
+    return out
+
+
 def run_all(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, n_test=N_TEST,
             seed=SEED):
     dates, rets = load_aligned_returns(TICKERS)
@@ -528,6 +708,9 @@ def run_all(n_epochs=N_EPOCHS, batch_size=BATCH_SIZE, n_test=N_TEST,
             dates, rets, n_epochs=n_epochs, batch_size=batch_size,
             n_test=n_test, seed=seed),
         "cross_decade": experiment_cross_decade(
+            dates, rets, n_epochs=n_epochs, batch_size=batch_size,
+            n_test=n_test, seed=seed),
+        "cross_decade_multi": experiment_cross_decade_multi(
             dates, rets, n_epochs=n_epochs, batch_size=batch_size,
             n_test=n_test, seed=seed),
     }
